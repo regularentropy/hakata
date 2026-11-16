@@ -1,0 +1,28 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hakata", "src\hakata\hakata.csproj", "{FAA96254-DF39-4DCB-9D07-E9370BC72F9A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hakata.Tests", "tests\Hakata.Tests\Hakata.Tests.csproj", "{EA1A9693-1B93-4B73-9278-8B59C021FB1C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FAA96254-DF39-4DCB-9D07-E9370BC72F9A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FAA96254-DF39-4DCB-9D07-E9370BC72F9A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FAA96254-DF39-4DCB-9D07-E9370BC72F9A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FAA96254-DF39-4DCB-9D07-E9370BC72F9A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA1A9693-1B93-4B73-9278-8B59C021FB1C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA1A9693-1B93-4B73-9278-8B59C021FB1C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA1A9693-1B93-4B73-9278-8B59C021FB1C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA1A9693-1B93-4B73-9278-8B59C021FB1C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

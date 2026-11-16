@@ -1,0 +1,50 @@
+name: Build Self-Contained
+on:
+  workflow_dispatch:
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore hakata.sln --runtime win-x64
+      - name: Build
+        run: dotnet build hakata.sln --configuration Release --no-restore
+      - name: Publish
+        run: dotnet publish src/hakata/hakata.csproj --configuration Release --output ./publish/win-x64 --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: win-x64
+          path: |
+            ./publish/win-x64/**
+            !./publish/win-x64/*.pdb
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore hakata.sln --runtime linux-x64
+      - name: Build
+        run: dotnet build hakata.sln --configuration Release --no-restore
+      - name: Publish
+        run: dotnet publish src/hakata/hakata.csproj --configuration Release --output ./publish/linux-x64 --runtime linux-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64
+          path: |
+            ./publish/linux-x64/**
+            !./publish/linux-x64/*.pdb
+# NOTE: touched to force GitHub to re-register this workflow; drop this line once it shows in the Actions tab.

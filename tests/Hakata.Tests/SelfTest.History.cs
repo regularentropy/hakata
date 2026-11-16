@@ -1,0 +1,606 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Hakata.Infrastructure;
+using Microsoft.Data.Sqlite;
+using Hakata.Models;
+using Hakata.Services;
+using Hakata.ViewModels;
+
+namespace Hakata;
+
+/// <summary>Dependency-free checks for the parts that break silently: endpoints, SSE, prompts, JSON parsing, history.</summary>
+public static partial class SelfTest
+{
+    static void HistorySidebar()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var history = new History(dir);
+        history.Add(new HistoryEntry { From = "en", To = "de", Source = "hello world", Output = "hallo welt" });
+        history.Add(new HistoryEntry { From = "auto", To = "fr", Source = "good morning", Output = "bonjour", Cost = 0.25 });
+
+        var messages = new List<string>();
+        var vm = new HistoryViewModel(history, messages.Add, _ => { });
+        Check(vm.Entries.Count == 2, "sidebar: lists every entry");
+        vm.SearchText = "bonjour";
+        Check(vm.Entries.Count == 1 && vm.Entries[0].Source == "good morning", "sidebar: search matches the output");
+        vm.SearchText = "";
+        Check(vm.Entries.Count == 2, "sidebar: clearing the search restores the list");
+
+        // the stored extras are searchable: "casual" and "slang" appear nowhere in source/output/route
+        vm.Entries[1].Alternatives = [new Alternative { Text = "hey", Explanation = "casual greeting" }];
+        vm.Entries[1].Insights = [new WordInsight { Word = "hello", Kind = "slang" }];
+        vm.SearchText = "casual";
+        Check(vm.Entries.Count == 1 && vm.Entries[0].Source == "hello world",
+            "sidebar: search matches a stored alternative's rationale");
+        vm.SearchText = "slang";
+        Check(vm.Entries.Count == 1 && vm.Entries[0].Source == "hello world",
+            "sidebar: search matches a stored insight's kind");
+        vm.SearchText = "";
+
+        Check(vm.HasSpend && vm.SpendLabel == "~$0.2500 spent", "sidebar: shows the running spend of the stored entries");
+
+        var entry = vm.Entries[0];
+        vm.ToggleFavoriteForCommand.Execute(entry);
+        Check(entry.Favorite && vm.Entries[0].Favorite, "sidebar: row star toggles the entry");
+
+        // Shift+click range: the list hands the model the whole picked set, and the buttons act on it.
+        var batch = vm.Entries.ToList();
+        vm.SetSelection(batch);
+        Check(vm.Selection.Count == 2, "sidebar: the picked rows reach the model");
+        vm.ToggleFavoriteCommand.Execute(null);
+        Check(batch.All(e => e.Favorite) && messages[^1] == "Added 2 entries to favorites",
+            "sidebar: favorite stars the whole selection, mixed set included");
+        vm.ToggleFavoriteCommand.Execute(null);
+        Check(batch.All(e => !e.Favorite) && messages[^1] == "Removed 2 entries from favorites",
+            "sidebar: a fully starred selection unstars as one");
+
+        vm.SelectedEntry = entry;
+        vm.SetSelection([]);
+        vm.DeleteSelectedCommand.Execute(null);
+        Check(!history.Entries.Contains(entry), "sidebar: delete removes the selected entry");
+        Check(history.Entries.Count == 1, "sidebar: a one-row selection deletes only that row");
+
+        var second = vm.Entries[0];
+        history.Add(new HistoryEntry { From = "en", To = "de", Source = "later", Output = "spaeter" });
+        vm.Refresh();
+        vm.SetSelection([second, vm.Entries[0]]);
+        vm.DeleteSelectedCommand.Execute(null);
+        Check(history.Entries.Count == 0 && vm.Selection.Count == 0 && vm.IsEmpty,
+            "sidebar: delete removes every picked row and drops the selection");
+
+        history.Add(new HistoryEntry { From = "en", To = "de", Source = "again", Output = "wieder" });
+        vm.Refresh();
+        Check(vm.Entries.Count == 1 && vm.Entries[0].Source == "again", "sidebar: refresh after delete shows the remaining row");
+        // Refresh must update the list in place: a Reset would null the bound ListBox selection (#0049 class)
+        var resets = 0;
+        vm.Entries.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Reset) resets++;
+        };
+        var picked = vm.Entries[0];
+        vm.SelectedEntry = picked;
+        vm.Refresh();
+        history.Add(new HistoryEntry { From = "en", To = "de", Source = "more", Output = "mehr" });
+        vm.Refresh();
+        Check(resets == 0, "sidebar: Refresh never fires a Reset on the entries list");
+        Check(ReferenceEquals(vm.SelectedEntry, picked), "sidebar: the picked entry survives a refresh that adds rows");
+
+        vm.ClearCommand.Execute(null);
+        Check(history.Entries.Count == 2 && vm.ClearButtonText == "Confirm?", "sidebar: clear asks before deleting");
+        vm.ClearCommand.Execute(null);
+        Check(history.Entries.Count == 0 && vm.IsEmpty, "sidebar: the second clear wipes the history");
+        Check(vm.FavoriteText.Contains("Favorite"), "sidebar: the star button still labels itself");
+        try { Directory.Delete(dir, true); } catch (Exception) { }
+
+        StartBusySaveProbe(); // runs in the background; checked at the end of HistoryPasswordProtection
+    }
+
+    // #9: SQLITE_BUSY / SQLITE_LOCKED must set a save notice instead of being swallowed. A real lock
+    // on the shared-cache in-memory database is only reported after the connection's 30-second busy
+    // timeout, longer than one test method may run, so the locked save runs as a background probe
+    // here and its notice is asserted once the probe finishes (CheckBusySaveProbe).
+    static History? busyStore;
+    static SqliteConnection? busyLocker;
+    static Task? busySave;
+    static string? busyDir;
+
+    static void StartBusySaveProbe()
+    {
+        busyDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        busyStore = new History(busyDir);
+        busyStore.Add(new HistoryEntry { From = "en", To = "de", Source = "busy one", Output = "busy eins" });
+        var memoryUri = (string)typeof(History).GetField("memoryUri",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(busyStore)!;
+        busyLocker = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = memoryUri, Pooling = false }.ToString());
+        busyLocker.Open();
+        using var begin = busyLocker.CreateCommand();
+        begin.CommandText = "BEGIN";
+        begin.ExecuteNonQuery();
+        using var read = busyLocker.CreateCommand();
+        read.CommandText = "SELECT COUNT(*) FROM Entries";
+        read.ExecuteScalar(); // the open transaction holds the table lock for the whole probe
+        busySave = Task.Run(() =>
+            busyStore.Add(new HistoryEntry { From = "en", To = "de", Source = "busy two", Output = "busy zwei" }));
+    }
+
+    static void CheckBusySaveProbe()
+    {
+        if (busySave is null || busyStore is null)
+        {
+            Check(false, "history #9: a locked store sets a save notice instead of failing silently");
+            return;
+        }
+        var waited = Stopwatch.StartNew();
+        while (!busySave.IsCompleted && waited.ElapsedMilliseconds < 28500) Thread.Sleep(250);
+        Check(busySave.IsCompleted && busyStore.SaveNotice is { Length: > 0 } && busyStore.SaveNotice.Contains("busy"),
+            "history #9: a locked store sets a save notice instead of failing silently");
+        busyLocker?.Dispose();
+        if (busyDir is not null) { try { Directory.Delete(busyDir, true); } catch (Exception) { } }
+    }
+
+    /// <summary>#0067 shape: a cost added to an entry already on screen must raise the row's cost
+    /// bindings — Refresh syncs rows in place, so nothing else re-reads the entry.</summary>
+    static void CostRowFollows()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var history = new History(dir);
+        var entry = new HistoryEntry { From = "en", To = "de", Source = "hello", Output = "hallo" };
+        history.Add(entry);
+
+        var messages = new List<string>();
+        var vm = new HistoryViewModel(history, messages.Add, _ => { });
+        vm.Refresh();
+
+        var raised = new List<string>();
+        entry.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        Check(vm.AddCost(entry, 0.5), "cost row: AddCost on a listed entry succeeds");
+        Check(entry.Cost == 0.5, "cost row: the added cost lands on the entry");
+        Check(raised.Contains(nameof(HistoryEntry.CostShort)),
+            "#0067: a cost added to a listed entry raises CostShort for the row's chip");
+        Check(raised.Contains(nameof(HistoryEntry.HasCost)),
+            "#0067: a cost added to a listed entry raises HasCost for the chip's visibility");
+
+        try { Directory.Delete(dir, true); } catch (Exception) { }
+    }
+
+    /// <summary>The store on disk is an AES-GCM snapshot: no plaintext, tamper-evident, key-bound.</summary>
+    static void HistoryEncryption()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            var h = new History(dir);
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "hello secret", Output = "hallo geheim" });
+            var dbPath = Path.Combine(dir, "history.db");
+            var bytes = File.ReadAllBytes(dbPath);
+            Check(bytes.AsSpan().StartsWith("OTENC1"u8), "encryption: the store carries the encrypted header");
+            Check(!Encoding.UTF8.GetString(bytes).Contains("hello secret"),
+                "encryption: no source text sits in the file plaintext");
+            Check(File.Exists(Path.Combine(dir, "history.key")), "encryption: the key file exists");
+            if (!OperatingSystem.IsWindows())
+                Check((File.GetUnixFileMode(Path.Combine(dir, "history.key")) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0,
+                    "encryption: history.key is owner-only off Windows");
+
+            var reloaded = new History(dir);
+            reloaded.Load();
+            Check(reloaded.Entries.Count == 1 && reloaded.Entries[0].Source == "hello secret"
+                && reloaded.RecoveryNotice is null, "encryption: the encrypted store reloads with its key");
+
+            // a flipped byte must fail the GCM tag: the store is kept in place and never overwritten
+            // (a replaced history.key lands here too — a swapped key must not clobber the store)
+            bytes[^3] ^= 0xFF;
+            File.WriteAllBytes(dbPath, bytes);
+            var tamperedBytes = File.ReadAllBytes(dbPath);
+            var tampered = new History(dir);
+            tampered.Load();
+            Check(tampered.Entries.Count == 0 && tampered.RecoveryNotice is { Length: > 0 }
+                && !File.Exists(dbPath + ".unreadable"), "encryption: a tampered store is not read and not moved aside");
+            tampered.Add(new HistoryEntry { Source = "x", Output = "y" });
+            Check(File.ReadAllBytes(dbPath).SequenceEqual(tamperedBytes),
+                "encryption: a failed-auth store is never overwritten (swapped-key protection)");
+
+            // a missing key on an encrypted store disables writing instead of overwriting the ciphertext
+            var dir2 = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            var h2 = new History(dir2);
+            h2.Add(new HistoryEntry { Source = "a", Output = "b" });
+            File.Delete(Path.Combine(dir2, "history.key"));
+            var keyless = new History(dir2);
+            keyless.Load();
+            Check(keyless.RecoveryNotice is { Length: > 0 } && keyless.RecoveryNotice.Contains("not saved"),
+                "encryption: a missing key reports that writing is disabled");
+            keyless.Add(new HistoryEntry { Source = "c", Output = "d" });
+            Check(File.ReadAllBytes(Path.Combine(dir2, "history.db")).AsSpan().StartsWith("OTENC1"u8),
+                "encryption: a keyless store is not overwritten");
+            try { Directory.Delete(dir2, true); } catch (Exception) { }
+
+            // a planted plaintext store is refused like any unreadable one: not loaded, kept
+            // aside under .unreadable, never re-encrypted in place
+            var dir3 = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(dir3);
+            var plainPath = Path.Combine(dir3, "history.db");
+            File.WriteAllBytes(plainPath, "SQLite format 3\0plaintext, not a store this build reads"u8.ToArray());
+            var refused = new History(dir3);
+            refused.Load();
+            Check(refused.Entries.Count == 0 && refused.RecoveryNotice is { Length: > 0 }
+                && File.Exists(plainPath + ".unreadable") && !File.Exists(plainPath),
+                "encryption: a plaintext store is refused and kept aside, not loaded or re-encrypted");
+            try { Directory.Delete(dir3, true); } catch (Exception) { }
+
+            // #12: a store truncated below magic+nonce+tag still starts with the magic but must
+            // throw CryptographicException (Load reports "locked or denied" on anything else)
+            var cryptoDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(cryptoDir);
+            var cryptoKey = HistoryCrypto.LoadOrCreateKey(cryptoDir);
+            var cipher = HistoryCrypto.Encrypt(cryptoKey!, Encoding.UTF8.GetBytes("SQLite format 3\0payload"));
+            var truncated = cipher.AsSpan(0, 10).ToArray(); // magic present, far short of magic+nonce+tag
+            Check(HistoryCrypto.IsEncrypted(truncated), "crypto: a truncated file still carries the magic");
+            try
+            {
+                HistoryCrypto.Decrypt(cryptoKey!, truncated);
+                Check(false, "crypto: a truncated store throws CryptographicException");
+            }
+            catch (CryptographicException)
+            {
+                Check(true, "crypto: a truncated store throws CryptographicException");
+            }
+            catch (Exception)
+            {
+                Check(false, "crypto: a truncated store throws CryptographicException, not a bad-argument error");
+            }
+
+            // #12: a DPAPI blob whose unwrapped plaintext is not base64 reads as Unreadable, not as
+            // a thrown FormatException (on Windows Protect really wraps, off Windows the plain
+            // string is not 32 bytes and the length check already yields Unreadable)
+            File.WriteAllBytes(HistoryCrypto.KeyPath(cryptoDir, "dpapi.key"),
+                Encoding.UTF8.GetBytes(KeyProtector.Protect("not base64!")));
+            Check(HistoryCrypto.ReadKey(cryptoDir, "dpapi.key").Kind == HistoryCrypto.KeyKind.Unreadable,
+                "crypto: a non-base64 DPAPI blob reads as unreadable");
+            try { Directory.Delete(cryptoDir, true); } catch (Exception) { }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
+    /// <summary>Clips are ciphertext at rest under a cache-owned key, the file name hides the content
+    /// hash, and a keyless cache is a miss.</summary>
+    static void SoundCacheEncryption()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var folder = Path.Combine(dir, "sound-cache");
+        try
+        {
+            var cache = new SoundCache(folder);
+            var contentKey = SoundCache.Key("https://p/v1", "https://p/audio/speech", "m", "v", "secret text");
+            var audio = Encoding.ASCII.GetBytes("FAKE-MP3-DATA-0123456789");
+            cache.Put("entry1", contentKey, audio, "audio/mpeg");
+            var files = Directory.GetFiles(folder, "*.audio");
+            Check(files.Length == 1, "cache encryption: one clip file");
+            Check(Path.GetFileNameWithoutExtension(files[0]) != "entry1-" + contentKey,
+                "cache encryption: the file name is a keyed MAC, not the content hash");
+            var raw = File.ReadAllBytes(files[0]);
+            Check(raw.AsSpan().StartsWith("OTENC1"u8) && !Encoding.ASCII.GetString(raw).Contains("FAKE-MP3-DATA"),
+                "cache encryption: the clip on disk is ciphertext");
+            Check(cache.Get("entry1", contentKey) is { } hit && hit.Audio.SequenceEqual(audio) && hit.MimeType == "audio/mpeg",
+                "cache encryption: the clip decrypts back for playback");
+            Check(File.Exists(Path.Combine(folder, "cache.key")), "cache encryption: the cache key exists");
+            if (!OperatingSystem.IsWindows())
+                Check((File.GetUnixFileMode(Path.Combine(folder, "cache.key")) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0
+                    && (File.GetUnixFileMode(files[0]) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0,
+                    "cache encryption: key and clip are owner-only off Windows");
+
+            // without the key a stored clip is a miss, never plaintext
+            File.Delete(Path.Combine(folder, "cache.key"));
+            Check(new SoundCache(folder).Get("entry1", contentKey) is null,
+                "cache encryption: a keyless cache is a miss");
+
+            // a clip that is not ciphertext is a miss, never served as plaintext
+            new SoundCache(folder).Put("entry2", contentKey, [9], "audio/mpeg"); // recreates cache.key
+            var fresh = Directory.GetFiles(folder, "*.audio").Single(f => Path.GetFileName(f).StartsWith("entry2-"));
+            File.WriteAllBytes(fresh, Encoding.ASCII.GetBytes("audio/mpeg\nPLAINTEXT"));
+            Check(new SoundCache(folder).Get("entry2", contentKey) is null,
+                "cache encryption: a plaintext clip is a miss, not served");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
+    /// <summary>Password protection wraps the data key, not the database: a locked store asks for the
+    /// password, a wrong one is rejected, and a folder copied to a "new machine" unlocks with it.</summary>
+    static void HistoryPasswordProtection()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            var h = new History(dir);
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "secret one", Output = "geheim eins" });
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "secret two", Output = "geheim zwei" });
+
+            // "set a password": wrap the existing data key, replace the key file
+            var dek = HistoryCrypto.LoadKey(dir);
+            Check(dek is { Length: 32 }, "password: the machine key loads before protection");
+            File.WriteAllText(HistoryCrypto.KeyPath(dir), HistoryCrypto.WrapPassword(dek!, "hunter2"));
+            Check(HistoryCrypto.IsPasswordHeader(File.ReadAllText(HistoryCrypto.KeyPath(dir))),
+                "password: the key file is now password-wrapped");
+
+            // "change password": re-wrap the same data key, the old password stops working
+            var headerOne = HistoryCrypto.WrapPassword(dek!, "pw-one");
+            var rewrapped = HistoryCrypto.UnwrapPassword(headerOne, "pw-one");
+            var headerTwo = HistoryCrypto.WrapPassword(rewrapped!, "pw-two");
+            Check(HistoryCrypto.IsPasswordHeader(headerTwo),
+                "password: the changed key file is still password-wrapped");
+            Check(HistoryCrypto.UnwrapPassword(headerTwo, "pw-two") is { } changed && changed.SequenceEqual(dek!),
+                "password: changing re-wraps the same data key, the new password unwraps it");
+            Check(HistoryCrypto.UnwrapPassword(headerTwo, "pw-one") is null,
+                "password: the old password no longer unwraps after a change");
+
+            // the settings dialog replaces the key file tmp+rename: nothing left behind, owner-only
+            // off Windows, and the wrap still reads back (the dialog's private helper does exactly
+            // this WriteRestrictedBytes + Move + RestrictFile sequence)
+            var tmpKey = Path.Combine(dir, "keycheck.key");
+            var wrap = HistoryCrypto.WrapPassword(dek!, "keyfile");
+            StoreFile.WriteRestrictedBytes(tmpKey + ".tmp", Encoding.UTF8.GetBytes(wrap));
+            File.Move(tmpKey + ".tmp", tmpKey, overwrite: true);
+            StoreFile.RestrictFile(tmpKey);
+            Check(!File.Exists(tmpKey + ".tmp"), "password: an atomic key write leaves no temp file");
+            if (!OperatingSystem.IsWindows())
+                Check((File.GetUnixFileMode(tmpKey) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0,
+                    "password: the rewritten key file is owner-only off Windows");
+            Check(HistoryCrypto.UnwrapPassword(File.ReadAllText(tmpKey), "keyfile") is { } fromKey
+                  && fromKey.SequenceEqual(dek!),
+                "password: the atomically written key file unwraps with its password");
+
+            var locked = new History(dir);
+            locked.Load();
+            Check(locked.NeedsPassword && locked.Entries.Count == 0 && locked.RecoveryNotice is { Length: > 0 },
+                "password: a password-protected store asks for the password and loads empty");
+            Check(!locked.LoadWithPassword("wrong"), "password: a wrong password is rejected");
+            Check(locked.LoadWithPassword("hunter2"), "password: the right password unlocks");
+            Check(locked.Entries.Count == 2 && locked.Entries[0].Source == "secret two",
+                "password: the unlocked store reads its entries");
+
+            // saving while unlocked must keep the password wrap, not clobber the key file
+            locked.Add(new HistoryEntry { From = "en", To = "de", Source = "secret three", Output = "geheim drei" });
+            Check(File.ReadAllText(HistoryCrypto.KeyPath(dir)).StartsWith("pwd:v1:"),
+                "password: saving keeps the password-wrapped key file");
+
+            // "new machine": copy the folder, the machine key is useless there, the password unlocks
+            var moved = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(moved);
+            File.Copy(Path.Combine(dir, "history.db"), Path.Combine(moved, "history.db"));
+            File.Copy(HistoryCrypto.KeyPath(dir), HistoryCrypto.KeyPath(moved));
+            var newMachine = new History(moved);
+            newMachine.Load();
+            Check(newMachine.NeedsPassword, "password: a copied folder on a new machine asks for the password");
+            Check(newMachine.LoadWithPassword("hunter2") && newMachine.Entries.Count == 3
+                && newMachine.Entries[0].Source == "secret three",
+                "password: the copied store unlocks on the new machine");
+            Check(!File.ReadAllText(Path.Combine(moved, "history.db")).Contains("secret"),
+                "password: the store on disk stays ciphertext");
+            try { Directory.Delete(moved, true); } catch (Exception) { }
+
+            // #8: a key file that wraps a DIFFERENT data key unwraps fine with the password but
+            // fails the store's GCM tag — the unlock must report failure, not open an empty,
+            // non-saving store as unlocked
+            var wrongDek = RandomNumberGenerator.GetBytes(32);
+            File.WriteAllText(HistoryCrypto.KeyPath(dir), HistoryCrypto.WrapPassword(wrongDek, "hunter2"));
+            var storeBytes = File.ReadAllBytes(Path.Combine(dir, "history.db"));
+            var mismatched = new History(dir);
+            mismatched.Load();
+            Check(mismatched.NeedsPassword, "password #8: the replaced key file still asks for the password");
+            Check(!mismatched.LoadWithPassword("hunter2"),
+                "password #8: an unlocked key that fails the store tag is not a successful unlock");
+            Check(mismatched.RecoveryNotice is { Length: > 0 } && mismatched.Entries.Count == 0,
+                "password #8: the failed unlock sets a recovery notice and loads nothing");
+            mismatched.Add(new HistoryEntry { From = "en", To = "de", Source = "sneaky", Output = "schleich" });
+            Check(File.ReadAllBytes(Path.Combine(dir, "history.db")).SequenceEqual(storeBytes),
+                "password #8: the failed unlock does not overwrite the store");
+
+            CheckBusySaveProbe(); // the background locked save from HistorySidebar finishes by now
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
+    static void HistoryRoundTrip()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var h = new History(dir);
+        h.Add(new HistoryEntry { From = "en", To = "de", Source = "hello", Output = "hallo" });
+        h.Add(new HistoryEntry { From = "auto", To = "fr", Source = "world", Output = "monde" });
+        Check(h.Entries.Count == 2 && h.Entries[0].Source == "world", "history: newest first");
+        h.Entries[1].Favorite = true;
+        h.Entries[1].TranslitSource = "haro";
+        h.Entries[1].TranslitTarget = "hallo";
+        h.Entries[1].AlternativesDescription = "plain";
+        h.Entries[1].Alternatives = [new Alternative { Text = "Hi", Explanation = "shorter" }];
+        h.Entries[1].Insights = [new WordInsight { Word = "hallo", Kind = "greeting",
+            Alternatives = [new Alternative { Text = "Guten Tag", Explanation = "formal" }] }];
+        h.Save();
+        var reloaded = new History(dir);
+        reloaded.Load();
+        Check(reloaded.Entries.Count == 2, "history: persisted");
+        Check(reloaded.Entries.Any(e => e.Favorite), "history: favorite persisted");
+        Check(reloaded.Entries[1].TranslitSource == "haro" && reloaded.Entries[1].TranslitTarget == "hallo",
+            "history: transliteration persisted with its entry");
+        Check(reloaded.Entries[1].AlternativesDescription == "plain"
+            && reloaded.Entries[1].Alternatives is [{ Text: "Hi", Explanation: "shorter" }],
+            "history: alternatives persisted with their entry");
+        Check(reloaded.Entries[1].Insights is [{ Word: "hallo", Kind: "greeting", Alternatives: [{ Text: "Guten Tag" }] }],
+            "history: word insights persisted with their entry");
+        Check(new HistoryEntry().Alternatives.Count == 0 && new HistoryEntry().Insights.Count == 0
+            && new HistoryEntry { AlternativesJson = "{corrupt" }.Insights.Count == 0,
+            "history: missing or corrupt extras read back as empty");
+        Check(reloaded.Entries[0].Route == "Detect Language → French", "history: route renders");
+        Check(reloaded.Entries[1].Route == "English → German", "history: route renders known pair");
+        reloaded.Clear();
+        Check(reloaded.Entries.Count == 0, "history: clear");
+        try { Directory.Delete(dir, true); } catch (Exception) { }
+
+        var customDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var custom = new History(customDir); // directory does not exist yet
+        custom.Add(new HistoryEntry { From = "en", To = "de", Source = "x", Output = "y" });
+        Check(File.Exists(Path.Combine(customDir, "history.db")), "history: custom dir is created on save");
+        if (!OperatingSystem.IsWindows())
+            Check((File.GetUnixFileMode(Path.Combine(customDir, "history.db")) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0,
+                "history: history.db is owner-only off Windows");
+        if (!OperatingSystem.IsWindows())
+        {
+            // read after the bytes landed: the dir must already be 0700 when the temp files exist
+            const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            const UnixFileMode SessionPermissions = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+            Check(File.GetUnixFileMode(customDir) == SessionPermissions,
+                "history: the data dir is 0700 before the snapshot temp file lands");
+            Check(File.GetUnixFileMode(Path.Combine(customDir, "history.db")) == OwnerOnly,
+                "history: history.db is 0600 off Windows");
+            new History(customDir).Load(); // exercises the decrypted load temp file too
+            Check(Directory.GetFiles(customDir, "history.db.tmp-*").Length == 0
+                  && Directory.GetFiles(customDir, "*.check").Length == 0
+                  && Directory.GetFiles(customDir, "*.load-*").Length == 0,
+                "history: save and load leave no plaintext temp, check or load files behind");
+            Check(!Directory.Exists(Path.Combine(customDir, ".tmp"))
+                  || Directory.GetFiles(Path.Combine(customDir, ".tmp")).Length == 0,
+                "history: the .tmp scratch subdir is empty after save and load");
+        }
+        try { Directory.Delete(customDir, true); } catch (Exception) { }
+
+        // env-home dir mode (#0055): the profile dir keeps the user's 0755, so the plaintext
+        // snapshot temp must live in the 0700 .tmp subdir, never in the dir itself
+        if (!OperatingSystem.IsWindows())
+        {
+            var homeDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            var previousHome = Environment.GetEnvironmentVariable("HAKATA_HOME");
+            try
+            {
+                Environment.SetEnvironmentVariable("HAKATA_HOME", homeDir);
+                Directory.CreateDirectory(homeDir);
+                const UnixFileMode Wide = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute; // 0755
+                File.SetUnixFileMode(homeDir, Wide);
+                var envHome = new History(homeDir);
+                envHome.Add(new HistoryEntry { From = "en", To = "de", Source = "secret temp", Output = "geheim temp" });
+                var tmpSub = Path.Combine(homeDir, ".tmp");
+                Check(File.GetUnixFileMode(homeDir) == Wide,
+                    "history: env-home dir mode keeps the user's 0755 on the profile dir");
+                Check(Directory.Exists(tmpSub)
+                      && File.GetUnixFileMode(tmpSub) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute),
+                    "history: the .tmp scratch subdir is 0700 even in env-home dir mode");
+                Check(Directory.GetFiles(homeDir, "history.db.tmp-*").Length == 0
+                      && Directory.GetFiles(homeDir, "history.db.load-*").Length == 0
+                      && Directory.GetFiles(homeDir, "*.enc").Length == 0
+                      && Directory.GetFiles(homeDir, "*.check").Length == 0,
+                    "history: no plaintext temp sits in the 0755 profile dir after a save");
+                // a killed save leaves its temp in .tmp; the next Load sweeps it
+                File.WriteAllBytes(Path.Combine(tmpSub, "history.db.tmp-stale"), new byte[] { 1, 2, 3 });
+                File.WriteAllBytes(Path.Combine(tmpSub, "history.db.tmp-stale.enc"), new byte[] { 4, 5, 6 });
+                File.WriteAllBytes(Path.Combine(tmpSub, "history.db.load-stale"), new byte[] { 7, 8, 9 });
+                new History(homeDir).Load();
+                Check(!File.Exists(Path.Combine(tmpSub, "history.db.tmp-stale"))
+                      && !File.Exists(Path.Combine(tmpSub, "history.db.tmp-stale.enc"))
+                      && !File.Exists(Path.Combine(tmpSub, "history.db.load-stale")),
+                    "history: Load sweeps stale snapshot temp files from .tmp");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("HAKATA_HOME", previousHome);
+                try { Directory.Delete(homeDir, true); } catch (Exception) { }
+            }
+        }
+
+        // #0061: a plaintext store is refused wherever it sits — never loaded, never re-encrypted
+        // in place; like any unreadable store it is kept aside under history.db.unreadable*
+        if (!OperatingSystem.IsWindows())
+        {
+            var prevHome = Environment.GetEnvironmentVariable("HAKATA_HOME");
+            try
+            {
+                // a valid plaintext store with a canary row, built from a scratch profile's snapshot
+                var scratch = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+                using (var hs = new History(scratch))
+                {
+                    hs.Load();
+                    hs.Add(new HistoryEntry { From = "en", To = "de", Source = "canary-plain-0061", Output = "x" });
+                }
+                var plain = HistoryCrypto.Decrypt(HistoryCrypto.LoadKey(scratch)!, File.ReadAllBytes(Path.Combine(scratch, "history.db")));
+                Directory.Delete(scratch, true);
+
+                foreach (var wideMode in new[] { true, false })
+                {
+                    var planted = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+                    Directory.CreateDirectory(planted);
+                    File.SetUnixFileMode(planted, wideMode
+                        ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                          | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite // 0777
+                        : UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); // 0700
+                    File.WriteAllBytes(Path.Combine(planted, "history.db"), plain);
+                    Environment.SetEnvironmentVariable("HAKATA_HOME", planted);
+                    using (var hp = new History(planted))
+                    {
+                        hp.Load();
+                        Check(!hp.Entries.Any(e => e.Source.Contains("canary-plain-0061"))
+                              && hp.RecoveryNotice is { Length: > 0 },
+                            "history #0061: a plaintext store is refused, not loaded");
+                        Check(File.Exists(Path.Combine(planted, "history.db.unreadable"))
+                              && File.ReadAllText(Path.Combine(planted, "history.db.unreadable")).Contains("canary-plain-0061")
+                              && !File.Exists(Path.Combine(planted, "history.db")),
+                            "history #0061: the planted plaintext store is kept aside, neither loaded nor re-encrypted");
+                    }
+                    Directory.Delete(planted, true);
+                }
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("HAKATA_HOME", prevHome);
+            }
+        }
+
+        // a store that cannot be written says so instead of failing silently
+        var blockedDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(blockedDir);
+        Directory.CreateDirectory(Path.Combine(blockedDir, "history.db")); // a directory where the database must go
+        var blocked = new History(blockedDir);
+        blocked.Add(new HistoryEntry { From = "en", To = "de", Source = "x", Output = "y" });
+        Check(blocked.SaveNotice is { Length: > 0 } && blocked.SaveNotice.Contains("could not be saved"),
+            "history: a failed save is reported, not swallowed");
+        try { Directory.Delete(blockedDir, true); } catch (Exception) { }
+
+        // #10: a mutation on a store that cannot be written still raises Changed (retention follows it)
+        var roDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var seed = new History(roDir);
+        seed.Add(new HistoryEntry { From = "en", To = "de", Source = "a", Output = "b" });
+        File.Delete(HistoryCrypto.KeyPath(roDir)); // an encrypted store without its key is not writable
+        var ro = new History(roDir);
+        ro.Load();
+        Check(ro.RecoveryNotice is { Length: > 0 }, "history #10: the keyless store loads as not writable");
+        var raised = 0;
+        ro.Changed += () => raised++;
+        ro.Add(new HistoryEntry { From = "en", To = "de", Source = "c", Output = "d" });
+        Check(raised == 1 && ro.Entries.Count == 1,
+            "history #10: Add on a non-writable store still raises Changed");
+        try { Directory.Delete(roDir, true); } catch (Exception) { }
+
+        // a cut at the limit never splits a surrogate pair
+        var astral = new HistoryEntry { Source = new string('a', 89) + "😀" + new string('b', 10) };
+        Check(!char.IsSurrogate(astral.Preview[^2]), "history: the preview cut never splits a surrogate pair");
+
+    }
+
+    // ---- end to end against a local mock endpoint ------------------------
+}

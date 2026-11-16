@@ -1,0 +1,21 @@
+bin/
+obj/
+.vs/
+.playwright-mcp/
+*.user
+
+.projectmem/events.jsonl
+.projectmem/watch.pid
+.projectmem/watch.log
+.projectmem/structure.json
+/.projectmem/
+/plan.md
+dist/
+
+# agent and tooling state, never shipped
+.pi/
+.codegraph/
+.security-scan/
+.github/hooks/
+.github/copilot-instructions.md
+/AGENTS.md

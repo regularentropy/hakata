@@ -1,0 +1,72 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Hakata.ViewModels"
+        xmlns:mi="using:Material.Icons.Avalonia"
+        xmlns:md="clr-namespace:Markdown.Avalonia;assembly=Markdown.Avalonia"
+        x:Class="Hakata.Views.UpdaterWindow"
+        x:DataType="vm:UpdateViewModel"
+        x:CompileBindings="True"
+        Title="Update available"
+        Icon="/Assets/app.png"
+        Width="560" Height="470"
+        MinWidth="480" MinHeight="360"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource PageBg}">
+
+  <Grid Margin="24" RowDefinitions="Auto,Auto,*,Auto">
+
+    <!-- what is available -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
+      <Border Width="44" Height="44" CornerRadius="22" VerticalAlignment="Center"
+              Background="{DynamicResource ControlBg}">
+        <mi:MaterialIcon Kind="Download" Width="22" Height="22" IconSize="22"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Foreground="{DynamicResource Accent}"/>
+      </Border>
+      <StackPanel Grid.Column="1" Margin="14,0,0,0" Spacing="4" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Classes="pageTitle" Text="{Binding Heading}" TextWrapping="Wrap"
+                     VerticalAlignment="Center"/>
+          <Border Background="{DynamicResource ControlBg}" CornerRadius="8" Padding="8,2"
+                  VerticalAlignment="Center">
+            <TextBlock Classes="field" Text="{Binding NewVersion}"/>
+          </Border>
+        </StackPanel>
+        <TextBlock Classes="hint" Text="{Binding VersionSummary}"/>
+      </StackPanel>
+    </Grid>
+
+    <Border Grid.Row="1" Height="1" Margin="0,16" Background="{DynamicResource Line}"/>
+
+    <!-- release notes -->
+    <Grid Grid.Row="2" RowDefinitions="Auto,*">
+      <TextBlock Classes="field" Text="What's new" Margin="0,0,0,8"/>
+      <Border Grid.Row="1" Classes="card" Padding="0">
+        <md:MarkdownScrollViewer x:Name="Notes" Padding="14,10" Markdown="{Binding ReleaseNotes}"
+                                 SelectionEnabled="True"/>
+      </Border>
+    </Grid>
+
+    <!-- actions -->
+    <Grid Grid.Row="3" Margin="0,16,0,0" ColumnDefinitions="*,Auto">
+      <StackPanel Spacing="4" VerticalAlignment="Center">
+        <TextBlock Classes="hint" Text="Opens the release page in your browser."/>
+        <TextBlock Classes="hint" Foreground="{DynamicResource Danger}" Text="{Binding Status}"
+                   IsVisible="{Binding HasStatus}"/>
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+        <Button Content="Later" Classes="dialogAction" IsCancel="True" Click="CloseButton_OnClick"
+                AutomationProperties.Name="Close without updating"/>
+        <Button Classes="dialogPrimary" IsDefault="True" Command="{Binding OpenUpdateLinkCommand}"
+                AutomationProperties.Name="Open release page">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <mi:MaterialIcon Kind="OpenInNew" IconSize="14"/>
+            <TextBlock Text="Open release page"/>
+          </StackPanel>
+        </Button>
+      </StackPanel>
+    </Grid>
+
+  </Grid>
+</Window>

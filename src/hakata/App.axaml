@@ -1,0 +1,601 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             xmlns:c="using:Hakata.Controls"
+             x:Class="Hakata.App"
+             RequestedThemeVariant="Default">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- a CheckBox is a Fluent control and would tick in Windows blue; same in both themes -->
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeChecked" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" Color="#F5C518"/>
+            <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="#18181B"/>
+            <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="#18181B"/>
+            <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#18181B"/>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="PageBg" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="PanelBg" Color="#FAFAFA"/>
+                    <SolidColorBrush x:Key="WorkBg" Color="#F1F1F3"/>
+                    <SolidColorBrush x:Key="PaneBg" Color="#FCFCFA"/>
+                    <SolidColorBrush x:Key="Line" Color="#E5E5E5"/>
+                    <SolidColorBrush x:Key="LineSoft" Color="#EFEFEF"/>
+                    <SolidColorBrush x:Key="TextMain" Color="#18181B"/>
+                    <SolidColorBrush x:Key="TextMuted" Color="#52525B"/>
+                    <SolidColorBrush x:Key="TextFaint" Color="#6E6E76"/>
+                    <SolidColorBrush x:Key="ControlBg" Color="#F4F4F5"/>
+                    <SolidColorBrush x:Key="ChipBg" Color="#F4F4F5"/>
+                    <SolidColorBrush x:Key="Accent" Color="#F5C518"/>
+                    <SolidColorBrush x:Key="AccentText" Color="#18181B"/>
+                    <SolidColorBrush x:Key="Warn" Color="#B45309"/>
+                    <SolidColorBrush x:Key="Danger" Color="#DC2626"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="PageBg" Color="#141416"/>
+                    <SolidColorBrush x:Key="PanelBg" Color="#1B1B1E"/>
+                    <!-- darker than the cards on purpose: in the dark theme a card on PanelBg has no edge -->
+                    <SolidColorBrush x:Key="WorkBg" Color="#0C0C0E"/>
+                    <SolidColorBrush x:Key="PaneBg" Color="#18181A"/>
+                    <SolidColorBrush x:Key="Line" Color="#33333A"/>
+                    <SolidColorBrush x:Key="LineSoft" Color="#26262B"/>
+                    <SolidColorBrush x:Key="TextMain" Color="#FAFAFA"/>
+                    <SolidColorBrush x:Key="TextMuted" Color="#A1A1AA"/>
+                    <SolidColorBrush x:Key="TextFaint" Color="#8A8A93"/>
+                    <SolidColorBrush x:Key="ControlBg" Color="#24242A"/>
+                    <SolidColorBrush x:Key="ChipBg" Color="#2B2B31"/>
+                    <SolidColorBrush x:Key="Accent" Color="#F5C518"/>
+                    <SolidColorBrush x:Key="AccentText" Color="#18181B"/>
+                    <!-- 11px text needs 4.5:1 on #141416: the light-theme amber and red fall short -->
+                    <SolidColorBrush x:Key="Warn" Color="#F59E0B"/>
+                    <SolidColorBrush x:Key="Danger" Color="#F87171"/>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+        <mi:MaterialIconStyles />
+
+        <!-- Fluent's surfaces are near-white; keep controls legible on our own palette. -->
+        <!-- :is() so subclasses such as IconButton keep the same look as a plain Button -->
+        <Style Selector=":is(Button)">
+            <Setter Property="Background" Value="{DynamicResource ControlBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <!-- An icon button is a compact square by default. Inside a Grid row it would otherwise
+             stretch: full row height, and as wide as the widest button in that Auto column, which
+             made the X and show buttons in the settings provider rows twice the size of the rest. -->
+        <Style Selector="c|IconButton">
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="Padding" Value="10,4"/>
+        </Style>
+        <Style Selector="ToggleButton:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource Accent}"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource AccentText}"/>
+        </Style>
+        <!-- a CheckBox is a ToggleButton: the button surface above drew a grey pill around every
+             unchecked checkbox. Only the label size is wanted here. The padding is the gap between
+             the box and its label (the template binds it to the label margin), so it stays 8. -->
+        <Style Selector="CheckBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,0,0,0"/>
+        </Style>
+        <Style Selector="CheckBox /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <!-- "More options" opens a panel, it is not a fourth quality tier: no pill, no accent when open -->
+        <Style Selector="ToggleButton.disclosure">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="Padding" Value="4,2"/>
+        </Style>
+        <Style Selector="ToggleButton.disclosure:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <Style Selector="ComboBox">
+            <Setter Property="Background" Value="{DynamicResource PageBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="32"/>
+        </Style>
+        <Style Selector="AutoCompleteBox">
+            <Setter Property="Background" Value="{DynamicResource PageBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="32"/>
+        </Style>
+        <!-- The Fluent template gives the drop-down a MinWidth of the field and no upper bound, so it
+             takes the width of the widest row the list has realized: scrolling a virtualized model list
+             stretched it to the long ids and shrank it back to the short ones. With every row measured
+             the drop-down is as wide as the longest id and stays there. -->
+        <Style Selector="AutoCompleteBox /template/ ListBox#PART_SelectingItemsControl">
+            <Setter Property="ItemsPanel">
+                <ItemsPanelTemplate>
+                    <StackPanel/>
+                </ItemsPanelTemplate>
+            </Setter>
+        </Style>
+        <!-- One field look across both windows: same text size and same 32px row height for a plain
+             text box, an autocomplete picker and a combo box. -->
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="{DynamicResource PageBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource Accent}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="32"/>
+        </Style>
+        <!-- three-value options draw as pills. A RadioButton, not a ToggleButton: pressing the chosen
+             value again must not leave the row with nothing chosen while the setting keeps its value. -->
+        <Style Selector="RadioButton.pill">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Background" Value="{DynamicResource ControlBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="Pill" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="RadioButton.pill:pointerover /template/ Border#Pill">
+            <Setter Property="BorderBrush" Value="{DynamicResource TextFaint}"/>
+        </Style>
+        <Style Selector="RadioButton.pill:checked">
+            <Setter Property="Background" Value="{DynamicResource Accent}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}"/>
+        </Style>
+        <!-- the accent fill needs a dark label: the app-wide TextBlock style otherwise leaves it white on yellow -->
+        <Style Selector="RadioButton.pill:checked /template/ ContentPresenter">
+            <Setter Property="TextBlock.Foreground" Value="{DynamicResource AccentText}"/>
+        </Style>
+        <!-- the settings dialog's section rail is a TabControl, not a stack of buttons: it keeps the
+             keyboard and selection behaviour of a tab strip with the look of a nav list -->
+        <!-- a button that sets its own accent brushes loses the theme's disabled look, so dim it here -->
+        <Style Selector="c|IconButton:disabled">
+            <Setter Property="Opacity" Value="0.45"/>
+        </Style>
+        <Style Selector="c|IconButton.quiet">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+        </Style>
+        <!-- The starred row star. A class, not Foreground="{DynamicResource Accent}" on the row's button:
+             measured in the history row template, a local value that is a DynamicResource loses to a style
+             setter on the same property (.quiet's TextMuted won, the star stayed grey), while a local literal
+             and this style-setter resource both apply. Kept as a class so the colour follows the theme resource. -->
+        <Style Selector="c|IconButton.starred">
+            <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+        </Style>
+        <!-- a history row keeps one star: faint, so it is discoverable, and full strength on hover,
+             selection or keyboard focus. Opacity 0 left an invisible but clickable and focusable
+             button in every row. -->
+        <Style Selector="c|IconButton.rowAction">
+            <Setter Property="Opacity" Value="0.35"/>
+        </Style>
+        <Style Selector="ListBoxItem:pointerover c|IconButton.rowAction">
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="ListBoxItem:selected c|IconButton.rowAction">
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="c|IconButton.rowAction:focus">
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <!-- a destructive action that has been clicked once: it now deletes on the next click -->
+        <Style Selector=":is(Button).armed">
+            <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Danger}"/>
+        </Style>
+        <Style Selector="TabControl.nav">
+            <Setter Property="ItemsPanel">
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="2"/>
+                </ItemsPanelTemplate>
+            </Setter>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Grid ColumnDefinitions="148,*">
+                        <Border Background="{DynamicResource PanelBg}" BorderBrush="{DynamicResource Line}"
+                                BorderThickness="0,0,1,0" Padding="8,12">
+                            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}"/>
+                        </Border>
+                        <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost"
+                                          Content="{TemplateBinding SelectedContent}"
+                                          ContentTemplate="{TemplateBinding SelectedContentTemplate}"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="TabItem.nav">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <!-- the left stripe is the selection mark: a grey fill alone is faint in the dark theme -->
+                    <Border Name="Rail" Background="Transparent" CornerRadius="6" Padding="9,7,10,7"
+                            BorderThickness="2,0,0,0" BorderBrush="Transparent">
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                          VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="TabItem.nav:pointerover /template/ Border#Rail">
+            <Setter Property="Background" Value="{DynamicResource LineSoft}"/>
+        </Style>
+        <Style Selector="TabItem.nav:selected">
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style Selector="TabItem.nav:selected /template/ Border#Rail">
+            <Setter Property="Background" Value="{DynamicResource ControlBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+        </Style>
+        <!-- one page inside the rail: keeps the form off the scrollbar and away from the window edge; right 16 clears the floating scrollbar (the gutter the ListBox rows use) -->
+        <Style Selector="ScrollViewer.page">
+            <Setter Property="Padding" Value="16,14,16,14"/>
+        </Style>
+        <!-- the settings page body rhythm: the page's own stack and each card body space 8 unless they set
+             their own. Direct children only: a descendant selector matches through control templates, so it
+             also spaced Fluent's template internals (#0086). -->
+        <Style Selector="ScrollViewer.page > StackPanel">
+            <Setter Property="Spacing" Value="8"/>
+        </Style>
+        <Style Selector="Border.card.page > StackPanel">
+            <Setter Property="Spacing" Value="8"/>
+        </Style>
+        <!-- settings action buttons: wider than the compact row buttons (6,2 default) -->
+        <Style Selector="c|IconButton.settings">
+            <Setter Property="Padding" Value="10,4"/>
+        </Style>
+        <!-- status pills beside a row title (default / built-in / running) -->
+        <Style Selector="Border.pill">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="6,1"/>
+        </Style>
+        <!-- headers that sit outside their page's scroll (Providers): same inset as ScrollViewer.page, minus the top the header carries itself -->
+        <Style Selector="Grid.pageHead">
+            <Setter Property="Margin" Value="16,14,16,0"/>
+        </Style>
+        <Style Selector="NumericUpDown">
+            <Setter Property="Background" Value="{DynamicResource PageBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Width" Value="130"/>
+        </Style>
+        <!-- Fluent wraps flyout content in 12,11,12,12 of air; the two-row price flyout only needs a rim -->
+        <Style Selector="FlyoutPresenter.compact">
+            <Setter Property="Padding" Value="10,8"/>
+        </Style>
+        <!-- Bare editor pane: the Fluent theme re-adds a 2px accent border on focus,
+             which made the source box look like a heavy framed block next to the plain result text. -->
+        <Style Selector="TextBox.bare">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style Selector="TextBox.bare /template/ Border#PART_BorderElement">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <!-- Set the text colour once on the window and let it inherit: a global TextBlock setter
+             overrode inheritance, so disabled content never dimmed and icon labels needed their
+             own Foreground binding. -->
+        <Style Selector="Window">
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <!-- one chrome for the two small modal dialogs (history password, profile picker):
+             they differ only in title, content and code-behind -->
+        <Style Selector="Window.dialog">
+            <Setter Property="Icon" Value="/Assets/app.png"/>
+            <Setter Property="Width" Value="400"/>
+            <Setter Property="SizeToContent" Value="Height"/>
+            <Setter Property="MinWidth" Value="320"/>
+            <Setter Property="WindowStartupLocation" Value="CenterOwner"/>
+            <Setter Property="Background" Value="{DynamicResource PageBg}"/>
+        </Style>
+        <Style Selector="Border.dialog">
+            <Setter Property="Margin" Value="16"/>
+        </Style>
+        <Style Selector="StackPanel.dialog">
+            <Setter Property="Spacing" Value="10"/>
+        </Style>
+        <Style Selector="Button.dialogAction">
+            <Setter Property="Padding" Value="14,4"/>
+        </Style>
+        <Style Selector="Button.dialogPrimary">
+            <Setter Property="Padding" Value="14,4"/>
+            <Setter Property="Background" Value="{DynamicResource Accent}"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <!-- status line: muted normally, red when the run failed -->
+        <Style Selector="SelectableTextBlock.status">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+        </Style>
+        <Style Selector="SelectableTextBlock.status.error">
+            <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+        </Style>
+        <!-- an edited source leaves the previous result visibly stale until the next run -->
+        <Style Selector="StackPanel.stale">
+            <Setter Property="Opacity" Value="0.55"/>
+        </Style>
+        <Style Selector="ListBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <!-- right gutter: Fluent's scrollbar floats over the content, so the row highlight must stop short of it -->
+            <Setter Property="Padding" Value="0,0,10,0"/>
+        </Style>
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Margin" Value="0,1"/>
+        </Style>
+        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource LineSoft}"/>
+        </Style>
+        <!-- one step stronger than the settings rail: a highlighted row here is a list selection, not a section -->
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource Line}"/>
+        </Style>
+        <Style Selector="Expander">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <!-- icons inherit the button's text colour; keep them a hair smaller than the label -->
+        <Style Selector="mi|MaterialIcon">
+            <Setter Property="IconSize" Value="16"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <!-- right-click menus: Fluent's menu is sized for touch, this app runs at 12px -->
+        <Style Selector="ContextMenu">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="2"/>
+        </Style>
+        <Style Selector="MenuItem">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="10,4"/>
+        </Style>
+        <!-- one heading size: settings sections, result cards, flyout titles, sidebar title -->
+        <Style Selector="TextBlock.title">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <!-- the heading of a settings page: one per tab, above every card -->
+        <Style Selector="TextBlock.pageTitle">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <!-- the two pane headers: structure labels, a step above the muted field captions -->
+        <Style Selector="TextBlock.paneTitle">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <!-- the endpoint label in the header opens Settings; warn when nothing is connected yet -->
+        <Style Selector=":is(Button).providerLabel">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="2,0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector=":is(Button).providerLabel:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+            <Setter Property="Background" Value="{DynamicResource LineSoft}"/>
+        </Style>
+        <Style Selector=":is(Button).providerLabel.unconfigured">
+            <Setter Property="Foreground" Value="{DynamicResource Warn}"/>
+        </Style>
+        <!-- one row of a flyout menu (the header model switcher): flat, left-aligned, hover line -->
+        <Style Selector=":is(Button).menuRow">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <Style Selector=":is(Button).menuRow:pointerover">
+            <Setter Property="Background" Value="{DynamicResource LineSoft}"/>
+        </Style>
+        <!-- the row name in front of a routing picker: Basic, Standard, Best, All tiers -->
+        <Style Selector="TextBlock.tier">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <!-- the two text roles that repeat in every window: a field label and a muted hint -->
+        <Style Selector="TextBlock.field">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+        </Style>
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <!-- settings help: a muted ? that shows the explanation on hover, on click and to a screen
+             reader. A button, not a bare glyph, so the keyboard can reach it too. -->
+        <Style Selector="c|HelpDot">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFaint}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="Padding" Value="3,0"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="c|HelpDot:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <Style Selector="c|HelpDot:focus">
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}"/>
+        </Style>
+        <!-- the two text roles that must not fight a local colour: they set no Foreground, so an element
+             can tint itself without a class setter winning (the #0070 trap) -->
+        <Style Selector="TextBlock.chip">
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+        <!-- muted stays declared before .error: a bound error class must win over it -->
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+        </Style>
+        <!-- a failed result card explains itself in red, like the status line -->
+        <Style Selector="TextBlock.error">
+            <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+        </Style>
+        <!-- the faint footer action that opens a price flyout: still a button, so it must read as one -->
+        <Style Selector="TextBlock.link">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="TextDecorations" Value="Underline"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <!-- the bordered panel the result cards and the settings pages build on -->
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="{DynamicResource PaneBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="10"/>
+        </Style>
+        <!-- settings page cards: the page-level padding, one place instead of ten copies -->
+        <Style Selector="Border.card.page">
+            <Setter Property="Padding" Value="14,12"/>
+        </Style>
+        <!-- a settings card with a section title over its fields: one control instead of the
+             Border+StackPanel+title copies. Cards without a plain-text title (or with a button
+             beside it) stay a plain Border.card.page. -->
+        <Style Selector="c|SettingsSection">
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Classes="card page">
+                        <StackPanel Spacing="{TemplateBinding Spacing}">
+                            <TextBlock Text="{TemplateBinding Header}" Classes="title"/>
+                            <ContentPresenter Content="{TemplateBinding Content}"/>
+                        </StackPanel>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <!-- a caption beside its help dot, or a row of small actions: the settings pages' one horizontal row -->
+        <Style Selector="StackPanel.actionRow">
+            <Setter Property="Orientation" Value="Horizontal"/>
+            <Setter Property="Spacing" Value="6"/>
+        </Style>
+        <!-- the label column in front of a settings field -->
+        <Style Selector="Grid.fieldRow">
+            <Setter Property="ColumnSpacing" Value="8"/>
+        </Style>
+        <!-- the strip above each translation pane -->
+        <Style Selector="Border.paneHead">
+            <Setter Property="BorderBrush" Value="{DynamicResource LineSoft}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Padding" Value="12,7,12,6"/>
+        </Style>
+        <!-- pane toolbar icon buttons: one metric instead of eight copies -->
+        <Style Selector="c|IconButton.paneAction">
+            <Setter Property="IconSize" Value="15"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Margin" Value="2,0"/>
+        </Style>
+        <!-- footer action buttons beside the primary Translate button -->
+        <Style Selector="c|IconButton.footerAction">
+            <Setter Property="Padding" Value="8,3"/>
+        </Style>
+        <!-- icon buttons that sit inside an option row: the same weight as the pane toolbar, so no
+             single button reads bigger than its neighbours. Pairs with fieldRow for the 32px height. -->
+        <Style Selector="c|IconButton.optAction">
+            <Setter Property="IconSize" Value="15"/>
+            <Setter Property="Padding" Value="6,3"/>
+        </Style>
+        <!-- as tall as a field row (the app's 32px standard) -->
+        <Style Selector="c|IconButton.fieldRow">
+            <Setter Property="MinHeight" Value="32"/>
+        </Style>
+        <!-- one option group row in the More options panel -->
+        <Style Selector="StackPanel.optGroup">
+            <Setter Property="Orientation" Value="Horizontal"/>
+            <Setter Property="Spacing" Value="4"/>
+            <Setter Property="Margin" Value="0,0,14,4"/>
+        </Style>
+        <!-- the two price fields in the footer flyout: identical twins, one style -->
+        <Style Selector="NumericUpDown.price">
+            <Setter Property="Width" Value="96"/>
+            <Setter Property="ShowButtonSpinner" Value="False"/>
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Increment" Value="0.01"/>
+            <Setter Property="FormatString" Value="0.####"/>
+        </Style>
+        <!-- text roles: body = translation text, small = secondary content, title = a card row title -->
+        <Style Selector="TextBlock.body">
+            <Setter Property="FontSize" Value="14"/>
+        </Style>
+        <Style Selector="TextBox.body">
+            <Setter Property="FontSize" Value="14"/>
+        </Style>
+        <Style Selector="TextBlock.small">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="TextBox.small">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Application.Styles>
+</Application>

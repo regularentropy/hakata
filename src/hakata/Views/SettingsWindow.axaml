@@ -1,0 +1,639 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:Hakata.Controls"
+        xmlns:conv="using:Avalonia.Data.Converters"
+        xmlns:infra="using:Hakata.Infrastructure"
+        xmlns:m="using:Hakata.Models"
+        xmlns:vm="using:Hakata.ViewModels"
+        x:Class="Hakata.Views.SettingsWindow"
+        x:DataType="vm:SettingsViewModel"
+        Title="{Binding WindowTitle}"
+        Icon="/Assets/app.png"
+        Width="800" Height="560"
+        MinWidth="720" MinHeight="420"
+        CanResize="True"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource PageBg}"
+        x:CompileBindings="True">
+  <Window.Resources>
+    <!-- one item template for every reasoning-effort ComboBox on the Models page -->
+    <DataTemplate x:Key="EffortChoiceTemplate" x:DataType="vm:SlotsViewModel+EffortChoice">
+      <TextBlock Text="{Binding Label}"/>
+    </DataTemplate>
+  </Window.Resources>
+  <Grid RowDefinitions="*,Auto">
+    <!-- six pages instead of one long scroll: the rail names what is where, the page holds the form -->
+    <TabControl Classes="nav" SelectedIndex="0">
+      <!-- ============ providers ============ -->
+      <TabItem Header="Providers" Classes="nav">
+        <!-- the header sits outside the scroll area: a visible list scrollbar must not cover the reload button -->
+        <Grid RowDefinitions="Auto,*">
+          <Grid Grid.Row="0" Classes="pageHead" ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+              <TextBlock Text="Providers" Classes="pageTitle" VerticalAlignment="Center"/>
+              <c:HelpDot Grid.Column="1" Margin="6,0,0,0"
+                         Explanation="Any OpenAI-compatible chat completions API: OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, vLLM… Add as many as you like; a slot that names none uses the first one."/>
+              <!-- showing the keys is one switch for the whole list, so it lives beside the list, not in every card -->
+              <c:IconButton Grid.Column="3" Icon="{Binding Providers.KeyIcon}" Label="{Binding Providers.KeyToggleText}"
+                            Command="{Binding Providers.ToggleKeyCommand}" Padding="9,3" Margin="0,0,6,0"
+                            ToolTip.Tip="Show or hide every provider's key"
+                            AutomationProperties.Name="Show API keys"/>
+              <c:IconButton Grid.Column="4" Icon="Refresh" Command="{Binding Providers.RefreshModelsCommand}" Padding="7,3"
+                            ToolTip.Tip="Reload every provider's model list" AutomationProperties.Name="Reload models"/>
+          </Grid>
+          <!-- local Padding removed: the class style's 14px top padding is the gap between the header and the first card -->
+          <ScrollViewer Grid.Row="1" Classes="page">
+            <StackPanel>
+            <TextBlock Classes="hint" IsVisible="{Binding IsFirstRun}"
+                       Text="Paste the API link of any OpenAI-compatible provider. Its model list and default model are filled in from the link; add a key if the provider asks for one."/>
+
+            <!-- one card per provider, so a second connection reads as its own block instead of another row -->
+            <ItemsControl x:Name="ProviderList" ItemsSource="{Binding Providers.Rows}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ProviderRow">
+                  <Border Classes="card" Padding="14,10" Margin="0,0,0,8">
+                    <!-- one caption over each field: a filled row has no placeholder left to say what it is.
+                         The URL gets its own full row: at the window's minimum width the old three-column
+                         layout squeezed it to about 120px. -->
+                    <Grid ColumnDefinitions="*,12,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                          RowSpacing="4">
+                      <TextBlock Grid.Row="0" Grid.Column="0" Classes="field" Text="Name"/>
+                      <TextBlock Grid.Row="0" Grid.Column="2" Classes="field" Text="Default model"/>
+                      <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding Name, Mode=TwoWay}"
+                               ToolTip.Tip="What the routing fields below call this provider"
+                               AutomationProperties.Name="Provider name"/>
+                      <AutoCompleteBox Grid.Row="1" Grid.Column="2" Text="{Binding Model, Mode=TwoWay}"
+                                       ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                       ItemsSource="{Binding Models}" MinimumPrefixLength="0"
+                                       PlaceholderText="leave empty to take the first"
+                                       ToolTip.Tip="This provider's own default model: what a slot that names this provider and no model sends. An empty field is filled from its model list."
+                                       AutomationProperties.Name="Provider default model"/>
+                      <c:IconButton Grid.Row="0" Grid.Column="3" Grid.RowSpan="2" Icon="Close"
+                                    Command="{Binding RemoveCommand}" VerticalAlignment="Top" Margin="5,0,0,0"
+                                    ToolTip.Tip="Remove this provider" AutomationProperties.Name="Remove provider"/>
+                      <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Classes="field" Text="Base URL"/>
+                      <TextBox Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Text="{Binding BaseUrl, Mode=TwoWay}"
+                               PlaceholderText="https://host/v1"
+                               AutomationProperties.Name="Provider base URL"/>
+                      <Border Grid.Row="4" Grid.ColumnSpan="4" Height="1" Background="{DynamicResource LineSoft}"
+                              Margin="0,6,0,2"/>
+                      <TextBlock Grid.Row="5" Grid.ColumnSpan="4" Classes="field"
+                                 Text="API key (optional)"/>
+                      <TextBox Grid.Row="6" Grid.ColumnSpan="4" Text="{Binding ApiKey, Mode=TwoWay}"
+                               PasswordChar="•" RevealPassword="{Binding KeyRevealed}"
+                               AutomationProperties.Name="Provider API key"/>
+                      <TextBlock Grid.Row="7" Grid.ColumnSpan="4" Text="{Binding HttpWarn}"
+                                 IsVisible="{Binding HttpWarn, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                                 Classes="hint error"
+                                 AutomationProperties.Name="HTTP warning"/>
+                      <TextBlock Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="3" Classes="field"
+                                 Text="Additional models"/>
+                      <ItemsControl Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="4" ItemsSource="{Binding ExtraModels}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ProviderRow+ExtraModelRow">
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
+                              <AutoCompleteBox Text="{Binding Id, Mode=TwoWay}"
+                                               ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                               ItemsSource="{Binding Models}" MinimumPrefixLength="0"
+                                               PlaceholderText="model id the provider accepts but may not list"
+                                               ToolTip.Tip="Offered in the model pickers only — nothing retries or falls back to it on its own."
+                                               AutomationProperties.Name="Optional model"/>
+                              <c:IconButton Grid.Column="1" Icon="Close" Command="{Binding RemoveCommand}"
+                                            Margin="5,0,0,0"
+                                            ToolTip.Tip="Remove this optional model" AutomationProperties.Name="Remove optional model"/>
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <c:IconButton Classes="settings" Grid.Row="10" Grid.Column="0" Icon="PlusThick" Label="Add model"
+                                    Command="{Binding AddExtraModelCommand}" HorizontalAlignment="Left"
+                                    ToolTip.Tip="Offer another model id in the pickers even when /models doesn't list it"
+                                    AutomationProperties.Name="Add optional model"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <Grid ColumnDefinitions="Auto,*,Auto">
+              <c:IconButton Classes="settings" Icon="PlusThick" Label="Add provider" Command="{Binding Providers.AddProviderCommand}"
+                           
+                            ToolTip.Tip="Add another provider, e.g. OpenRouter beside a local server"/>
+              <c:IconButton Classes="settings" Grid.Column="2" Icon="TestTube" Label="Test connection"
+                            Command="{Binding Providers.TestConnectionCommand}"
+                            ToolTip.Tip="Check the URLs and keys against each provider's /models endpoint"/>
+            </Grid>
+            <ProgressBar IsIndeterminate="True" Height="3" IsVisible="{Binding Providers.ModelsLoading}"
+                         Background="Transparent" Foreground="{DynamicResource Accent}"/>
+            <TextBlock Classes="hint" Text="{Binding Providers.ModelStatus}"/>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <!-- ============ model routing ============ -->
+      <TabItem Header="Models" Classes="nav">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="Model routing" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="Each quality tier — Basic, Standard, Best — maps onto a provider and a model. Every picker lists all providers: an id only one provider offers stays bare, an id two of them offer is written 'provider · model'. An empty field uses the first provider and its own model. Detect and transliteration stay on Basic (they are small jobs), while alternatives and word insights follow the tier you translated with."/>
+            </StackPanel>
+
+            <c:SettingsSection Header="Per-quality model overrides (optional)" Spacing="6">
+                <Grid Classes="fieldRow" ColumnDefinitions="76,*,170" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="4">
+                  <TextBlock Grid.Row="0" Grid.Column="1" Classes="field" Text="Model (provider · model)"/>
+                  <TextBlock Grid.Row="0" Grid.Column="2" Classes="field" Text="Effort"/>
+                  <TextBlock Grid.Row="1" Text="Basic" Classes="tier"/>
+                  <AutoCompleteBox x:Name="BasicModelBox" Grid.Row="1" Grid.Column="1"
+                                   ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                   Text="{Binding Slots.BasicModelText, Mode=TwoWay}" ItemsSource="{Binding Slots.BasicModels}"
+                                   MinimumPrefixLength="0" PlaceholderText="{Binding Slots.FallbackModelHint}"
+                                   AutomationProperties.Name="Basic tier model"/>
+                  <ComboBox x:Name="BasicEffortBox" Grid.Row="1" Grid.Column="2"
+                            ItemsSource="{Binding Slots.BasicEfforts}" SelectedItem="{Binding Slots.BasicEffortChoice, Mode=TwoWay}"
+                            ItemTemplate="{StaticResource EffortChoiceTemplate}"
+                            ToolTip.Tip="Reasoning effort for the Basic tier"/>
+                  <TextBlock Grid.Row="2" Text="Standard" Classes="tier"/>
+                  <AutoCompleteBox x:Name="StandardModelBox" Grid.Row="2" Grid.Column="1"
+                                   ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                   Text="{Binding Slots.StandardModelText, Mode=TwoWay}" ItemsSource="{Binding Slots.StandardModels}"
+                                   MinimumPrefixLength="0" PlaceholderText="{Binding Slots.FallbackModelHint}"
+                                   AutomationProperties.Name="Standard tier model"/>
+                  <ComboBox x:Name="StandardEffortBox" Grid.Row="2" Grid.Column="2"
+                            ItemsSource="{Binding Slots.StandardEfforts}" SelectedItem="{Binding Slots.StandardEffortChoice, Mode=TwoWay}"
+                            ItemTemplate="{StaticResource EffortChoiceTemplate}"
+                            ToolTip.Tip="Reasoning effort for the Standard tier"/>
+                  <TextBlock Grid.Row="3" Text="Best" Classes="tier"/>
+                  <AutoCompleteBox x:Name="BestModelBox" Grid.Row="3" Grid.Column="1"
+                                   ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                   Text="{Binding Slots.BestModelText, Mode=TwoWay}" ItemsSource="{Binding Slots.BestModels}"
+                                   MinimumPrefixLength="0" PlaceholderText="{Binding Slots.FallbackModelHint}"
+                                   AutomationProperties.Name="Best tier model"/>
+                  <ComboBox x:Name="BestEffortBox" Grid.Row="3" Grid.Column="2"
+                            ItemsSource="{Binding Slots.BestEfforts}" SelectedItem="{Binding Slots.BestEffortChoice, Mode=TwoWay}"
+                            ItemTemplate="{StaticResource EffortChoiceTemplate}"
+                            ToolTip.Tip="Reasoning effort for the Best tier"/>
+                </Grid>
+            </c:SettingsSection>
+
+            <!-- stays a plain card: the help dot belongs beside the title, which the section's text header cannot host -->
+            <Border Classes="card page">
+              <StackPanel Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Reasoning effort" Classes="title"/>
+                  <c:HelpDot Explanation="{Binding Slots.EffortHint}"/>
+                </StackPanel>
+                <Grid Classes="fieldRow">
+                  <TextBlock Text="All tiers" Classes="tier"
+                             ToolTip.Tip="Default effort; the per-tier fields above override it"/>
+                  <ComboBox x:Name="EffortBox" Grid.Column="1"
+                            ItemsSource="{Binding Slots.EffortChoices}" SelectedItem="{Binding Slots.ReasoningEffortChoice, Mode=TwoWay}"
+                            ItemTemplate="{StaticResource EffortChoiceTemplate}"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ============ speech ============ -->
+      <TabItem Header="Speech" Classes="nav">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="Speech" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="The mic button in the source toolbar posts your recording to /audio/transcriptions. The sound button in the translation toolbar posts the translation to /audio/speech and plays what comes back. Both use the provider picked in each field below, and derive the URL from it when the field is empty."/>
+            </StackPanel>
+
+            <c:SettingsSection Header="Speech to text">
+              <StackPanel Spacing="8">
+                <StackPanel Spacing="4">
+                  <StackPanel Classes="actionRow">
+                    <TextBlock Classes="field" Text="Model"/>
+                    <c:HelpDot
+                        Explanation="Picked from the provider's audio model list when it publishes one; with more than one provider added the list reads 'provider · model' and picking one sends the mic there. OpenAI and Groq: whisper-1, gpt-4o-transcribe, whisper-large-v3-turbo. An empty field sends whisper-1."/>
+                  </StackPanel>
+                  <AutoCompleteBox x:Name="SpeechModelBox" ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                   Text="{Binding Slots.SpeechModelText, Mode=TwoWay}" ItemsSource="{Binding Slots.SpeechModels}"
+                                   MinimumPrefixLength="0" PlaceholderText="whisper-1"
+                                   AutomationProperties.Name="Speech to text model"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                  <StackPanel Classes="actionRow">
+                    <TextBlock Classes="field" Text="Transcription URL (optional)"/>
+                    <c:HelpDot Explanation="{Binding SpeechUrlHint}"/>
+                  </StackPanel>
+                  <TextBox x:Name="SpeechUrlBox" Text="{Binding SpeechUrl, Mode=TwoWay}"
+                           PlaceholderText="leave empty to derive it"
+                           AutomationProperties.Name="Transcription endpoint"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="field" Text="Price per minute (manual fallback)"/>
+                  <NumericUpDown x:Name="SpeechPriceBox" Classes="price" HorizontalAlignment="Left"
+                                 Value="{Binding SpeechPricePerMinute, Mode=TwoWay}"
+                                 AutomationProperties.Name="Manual transcription price per minute"/>
+                </StackPanel>
+              </StackPanel>
+            </c:SettingsSection>
+
+            <c:SettingsSection Header="Text to sound">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="*,150" ColumnSpacing="8">
+                  <StackPanel Grid.Column="0" Spacing="4">
+                    <TextBlock Classes="field" Text="Model"/>
+                    <AutoCompleteBox x:Name="SoundModelBox" ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                     Text="{Binding Slots.SoundModelText, Mode=TwoWay}" ItemsSource="{Binding Slots.SoundModels}"
+                                     MinimumPrefixLength="0" PlaceholderText="tts-1"
+                                     ToolTip.Tip="Filled from the provider's audio model list when it publishes one (filtered to text-to-speech models), and left empty until then. OpenAI: tts-1, tts-1-hd, gpt-4o-mini-tts. An empty field sends tts-1."
+                                     AutomationProperties.Name="Text to sound model"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Classes="field" Text="Voice"/>
+                    <AutoCompleteBox x:Name="SoundVoiceBox" ItemFilter="{x:Static infra:FuzzyMatch.Predicate}"
+                                     Text="{Binding SoundVoice, Mode=TwoWay}" ItemsSource="{Binding SoundVoices}"
+                                     MinimumPrefixLength="0" PlaceholderText="alloy"
+                                     ToolTip.Tip="The voices the provider publishes for the model on the left, with its published default filled in. A provider that publishes none (OpenAI, Groq, local servers) gets the OpenAI voice names. An empty field sends alloy."
+                                     AutomationProperties.Name="Voice"/>
+                  </StackPanel>
+                </Grid>
+                <StackPanel Spacing="4">
+                  <StackPanel Classes="actionRow">
+                    <TextBlock Classes="field" Text="Sound URL (optional)"/>
+                    <c:HelpDot Explanation="{Binding SoundUrlHint}"/>
+                  </StackPanel>
+                  <TextBox x:Name="SoundUrlBox" Text="{Binding SoundUrl, Mode=TwoWay}"
+                           PlaceholderText="leave empty to derive it"
+                           AutomationProperties.Name="Sound endpoint"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="field" Text="Price per 1M characters (manual fallback)"/>
+                  <NumericUpDown x:Name="SoundPriceBox" Classes="price" HorizontalAlignment="Left"
+                                 Value="{Binding SoundPricePerMChars, Mode=TwoWay}"
+                                 AutomationProperties.Name="Manual synthesis price per million characters"/>
+                </StackPanel>
+                <Border Height="1" Background="{DynamicResource LineSoft}" Margin="0,2"/>
+                <CheckBox x:Name="SoundCacheToggle" IsChecked="{Binding CacheSound, Mode=TwoWay}"
+                          ToolTip.Tip="Keeps each rendered clip in the sound-cache folder under the app data folder. The same translation, model and voice then plays without a request; turning this off always renders fresh audio and stores nothing.">
+                  <TextBlock Text="Cache generated audio" Classes="small"/>
+                </CheckBox>
+                <Grid ColumnDefinitions="Auto,Auto,*" IsEnabled="{Binding CacheSound}" ColumnSpacing="8">
+                  <TextBlock Text="Keep for the last" Classes="field" VerticalAlignment="Center"/>
+                  <NumericUpDown x:Name="SoundCacheEntriesBox" Grid.Column="1" Minimum="0"
+                                 Maximum="200" Increment="5" FormatString="0"
+                                 Value="{Binding SoundCacheEntries, Mode=TwoWay}"
+                                 AutomationProperties.Name="Cached history entries"/>
+                  <TextBlock Grid.Column="2" Text="history entries (favorites always kept)" Classes="hint"
+                             VerticalAlignment="Center"/>
+                </Grid>
+              </StackPanel>
+            </c:SettingsSection>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ============ display ============ -->
+      <TabItem Header="Display" Classes="nav">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="Display" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="Theme: the ☀ button in the main window header. Transliteration adds a Latin-letter line under texts in Cyrillic, Arabic, CJK, kana, Hangul, Indic or Thai: it is one extra request per run after the translation lands, and Latin-to-Latin pairs are skipped."/>
+            </StackPanel>
+
+            <c:SettingsSection Header="Transliteration">
+              <StackPanel Spacing="8">
+                <CheckBox x:Name="TransliterationToggle" IsChecked="{Binding Transliteration, Mode=TwoWay}"
+                          ToolTip.Tip="Romanise text written in a non-Latin script">
+                  <TextBlock Text="Show transliteration" Classes="small"/>
+                </CheckBox>
+                <Grid ColumnDefinitions="Auto,Auto,*" IsEnabled="{Binding Transliteration}" ColumnSpacing="8">
+                  <TextBlock Text="Only up to" Classes="field" VerticalAlignment="Center"/>
+                  <NumericUpDown x:Name="TranslitLimitBox" Grid.Column="1" Minimum="0"
+                                 Maximum="100000" Increment="50" FormatString="0"
+                                 Value="{Binding TransliterationMaxChars, Mode=TwoWay}"
+                                 AutomationProperties.Name="Transliteration character limit"/>
+                  <TextBlock Grid.Column="2" Text="source characters (0 turns it off)" Classes="hint"
+                             VerticalAlignment="Center"/>
+                </Grid>
+                <CheckBox x:Name="TransliterationSourceToggle" IsChecked="{Binding TransliterationOnSource, Mode=TwoWay}"
+                          IsEnabled="{Binding Transliteration}"
+                          ToolTip.Tip="Leave off to keep the source pane clean and romanise the translation only">
+                  <TextBlock Text="Also under the original text" Classes="small"/>
+                </CheckBox>
+              </StackPanel>
+            </c:SettingsSection>
+
+            <c:SettingsSection Header="History sidebar">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                  <TextBlock Text="Width" Classes="field" VerticalAlignment="Center"/>
+                  <NumericUpDown x:Name="SidebarWidthBox" Grid.Column="1"
+                                 Minimum="{Binding SidebarWidthMin}" Maximum="{Binding SidebarWidthMax}"
+                                 Increment="10" FormatString="0"
+                                 Value="{Binding SidebarWidth, Mode=TwoWay}"
+                                 AutomationProperties.Name="History sidebar width in pixels"/>
+                  <TextBlock Grid.Column="2" Text="px — or drag the sidebar edge in the main window" Classes="hint"
+                             VerticalAlignment="Center"/>
+                </Grid>
+                <Button Content="Reset to default" Command="{Binding ResetSidebarWidthCommand}"
+                        HorizontalAlignment="Left" Padding="10,4"
+                        ToolTip.Tip="Back to the default width; applies on Save"
+                        AutomationProperties.Name="Reset the history sidebar width to the default"/>
+                <CheckBox x:Name="SaveExtrasToggle" IsChecked="{Binding SaveExtras, Mode=TwoWay}"
+                          ToolTip.Tip="Store alternative translations and word insights with each history entry, so restoring one shows them again without a new request">
+                  <TextBlock Text="Keep alternatives &amp; insights in history" Classes="small"/>
+                </CheckBox>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="HistoryPasswordButton" Content="Protect history with a password"
+                          Click="OnHistoryPassword" HorizontalAlignment="Left" Padding="10,4"
+                          ToolTip.Tip="Wrap the history key with a password: the folder can then be moved to another machine and unlocked there with it"
+                          AutomationProperties.Name="Set or remove the history password"/>
+                  <Button x:Name="ChangePasswordButton" Content="Change password" Click="OnChangePassword"
+                          IsVisible="False" HorizontalAlignment="Left" Padding="10,4"
+                          ToolTip.Tip="Re-wrap the history key with a new password — the stored translations are not re-encrypted"
+                          AutomationProperties.Name="Change the history password"/>
+                </StackPanel>
+              </StackPanel>
+            </c:SettingsSection>
+
+            <c:SettingsSection Header="Alternatives" Spacing="6">
+              <StackPanel Spacing="6">
+                <Grid Classes="fieldRow">
+                  <TextBlock Text="Count" Classes="tier" VerticalAlignment="Center"
+                             ToolTip.Tip="How many alternative translations the Alternatives panel asks for"/>
+                  <NumericUpDown x:Name="AlternativesCountBox" Grid.Column="1"
+                                 Minimum="1" Maximum="5" Increment="1" FormatString="0"
+                                 Value="{Binding AlternativesCount, Mode=TwoWay}"
+                                 AutomationProperties.Name="Alternatives count"/>
+                </Grid>
+                <TextBlock Classes="hint" TextWrapping="Wrap"
+                           Text="One extra request per run; 3 is the default."/>
+              </StackPanel>
+            </c:SettingsSection>
+
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ============ profiles ============ -->
+      <TabItem x:Name="ProfilesTab" Header="Profiles" Classes="nav" x:DataType="vm:ProfilesViewModel">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="Profiles" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="A profile is a separate data folder under the app's profiles/ directory: its own history, settings and keys. The 'built-in' row is the default profile and cannot be renamed or deleted. The 'default' chip marks the profile a plain launch opens, 'running here' is this instance. Select a row, then Switch loads that profile in this window — double-clicking a row does the same. A row marked 'running elsewhere' is open in another instance."/>
+            </StackPanel>
+
+            <Border Classes="card page">
+              <StackPanel>
+                <ListBox x:Name="ProfileList" ItemsSource="{Binding Rows}" SelectedItem="{Binding Selected, Mode=TwoWay}"
+                         MaxHeight="220" MinHeight="60" DoubleTapped="OnProfileDoubleTapped"
+                         AutomationProperties.Name="Profiles">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ProfilesViewModel+ProfileRow">
+                      <StackPanel Spacing="0">
+                        <StackPanel Classes="actionRow">
+                          <TextBlock Text="{Binding Name}" Classes="title" VerticalAlignment="Center"/>
+                          <!-- accent fill + dark label, like the checked pill: readable in both themes -->
+                          <Border Classes="pill" Background="{DynamicResource Accent}"
+                                  IsVisible="{Binding IsLaunchDefault}" VerticalAlignment="Center">
+                            <TextBlock Classes="chip" Text="default" Foreground="{DynamicResource AccentText}"/>
+                          </Border>
+                          <Border Classes="pill" Background="{DynamicResource ChipBg}"
+                                  IsVisible="{Binding IsDefault}" VerticalAlignment="Center">
+                            <TextBlock Classes="chip" Text="built-in"/>
+                          </Border>
+                          <Border Classes="pill" Background="{DynamicResource ChipBg}"
+                                  IsVisible="{Binding IsRunning}" VerticalAlignment="Center">
+                            <TextBlock Classes="chip" Text="running here"/>
+                          </Border>
+                          <Border Classes="pill" Background="{DynamicResource ChipBg}"
+                                  IsVisible="{Binding Running}" VerticalAlignment="Center">
+                            <TextBlock Classes="chip" Text="running elsewhere" Foreground="{DynamicResource Warn}"/>
+                          </Border>
+                        </StackPanel>
+                        <TextBlock Text="{Binding Dir}" Classes="hint"/>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding NewName, Mode=TwoWay}" PlaceholderText="New profile name"
+                           AutomationProperties.Name="New profile name"/>
+                  <c:IconButton Classes="settings" Grid.Column="1" Icon="PlusThick" Label="Create" Command="{Binding CreateCommand}"
+                               
+                                ToolTip.Tip="Create a profile with the name on the left"
+                                AutomationProperties.Name="Create profile"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <c:SettingsSection Header="Selected profile">
+              <StackPanel Spacing="8">
+                <!-- the buttons stay enabled: a refused action explains itself in the status line below,
+                     a silently disabled button left the user guessing why (e.g. deleting the previous
+                     default while this instance still runs in it) -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:IconButton Classes="settings" Icon="ArrowLeftRight" Label="Switch" Command="{Binding SwitchCommand}"
+                               
+                                ToolTip.Tip="Load the selected profile in this window now"
+                                AutomationProperties.Name="Switch profile"/>
+                  <c:IconButton Classes="settings" Icon="OpenInNew" Label="Open in new instance" Command="{Binding OpenNewCommand}"
+                               
+                                ToolTip.Tip="Run the selected profile in a second app instance"
+                                AutomationProperties.Name="Open in new instance"/>
+                  <c:IconButton Classes="settings" Icon="CheckCircle" Label="Set as default" Command="{Binding SetDefaultCommand}"
+                               
+                                ToolTip.Tip="Make the selected profile the one a plain launch opens (marked 'default') — no switch now"
+                                AutomationProperties.Name="Set as default"/>
+                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding RenameName, Mode=TwoWay}" PlaceholderText="Rename the selected profile to…"
+                           AutomationProperties.Name="Rename profile to"/>
+                  <c:IconButton Classes="settings" Grid.Column="1" Icon="PencilOutline" Label="Rename" Command="{Binding RenameCommand}"
+                               
+                                ToolTip.Tip="Rename the selected profile to the name on the left"
+                                AutomationProperties.Name="Rename profile"/>
+                  <c:IconButton Classes="settings" Grid.Column="2" Icon="Delete" Label="{Binding DeleteText}" Command="{Binding DeleteCommand}"
+                                Classes.armed="{Binding DeleteArmed}"
+                                ToolTip.Tip="Delete the selected profile and its data — asked twice"
+                                AutomationProperties.Name="{Binding DeleteAutomationName}"/>
+                </Grid>
+                <TextBlock Classes="hint" Classes.error="{Binding StatusIsError}" Text="{Binding Status}"
+                           IsVisible="{Binding Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                           AutomationProperties.Name="Profile status"/>
+              </StackPanel>
+            </c:SettingsSection>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <!-- ============ presets ============ -->
+      <TabItem x:Name="PresetsTab" Header="Presets" Classes="nav" x:DataType="vm:PresetsViewModel">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="Presets" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="A preset is a named bundle of translation options: the context text plus formality, complexity, style and the two genders. Selecting one applies all of it in the main window. Rename, reorder, import and export here."/>
+            </StackPanel>
+
+            <Border Classes="card page">
+              <StackPanel>
+                <ListBox x:Name="PresetList" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedPreset, Mode=TwoWay}"
+                         MaxHeight="220" MinHeight="60"
+                         AutomationProperties.Name="Presets">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="m:TranslationPreset">
+                      <StackPanel Spacing="0">
+                        <StackPanel Classes="actionRow">
+                          <TextBlock Text="{Binding Name}" Classes="title" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding Context}" Classes="hint" TextTrimming="CharacterEllipsis"/>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card page">
+              <StackPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding NewPresetName, Mode=TwoWay}" PlaceholderText="Legal contract"
+                           AutomationProperties.Name="Preset name"/>
+                  <Button Grid.Column="1" Content="Save as preset" Command="{Binding AddPresetCommand}" Padding="10,4"
+                          ToolTip.Tip="Save the name and the current options as a preset; the same name overwrites it"
+                          AutomationProperties.Name="Save as preset"/>
+                  <Button Grid.Column="2" Content="Rename" Command="{Binding RenamePresetCommand}" Padding="10,4"
+                          ToolTip.Tip="Rename the selected preset to the name on the left"
+                          AutomationProperties.Name="Rename preset"/>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Content="Move up" Command="{Binding MoveUpCommand}" Padding="10,4"
+                          ToolTip.Tip="Move the selected preset one row up"
+                          AutomationProperties.Name="Move preset up"/>
+                  <Button Content="Move down" Command="{Binding MoveDownCommand}" Padding="10,4"
+                          ToolTip.Tip="Move the selected preset one row down"
+                          AutomationProperties.Name="Move preset down"/>
+                  <c:IconButton Classes="settings" Icon="Delete" Label="{Binding DeleteText}" Command="{Binding DeletePresetCommand}"
+                                Classes.armed="{Binding DeleteArmed}"
+                                ToolTip.Tip="{Binding DeleteTip}"
+                                AutomationProperties.Name="Delete preset"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Content="Import…" Click="OnPresetsImport" Padding="10,4"
+                          ToolTip.Tip="Merge presets from a JSON file: only names or ids not on file yet are added"
+                          AutomationProperties.Name="Import presets"/>
+                  <Button Content="Export…" Click="OnPresetsExport" Padding="10,4"
+                          ToolTip.Tip="Save every preset to a JSON file"
+                          AutomationProperties.Name="Export presets"/>
+                </StackPanel>
+                <TextBlock Classes="hint"
+                           Text="A preset also stores formality, complexity, style and the two genders. Import adds only presets whose name and id are both new; existing ones are left alone."/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <!-- ============ about ============ -->
+      <!-- the last page in the rail: what the build is, and the update check that reads its release feed -->
+      <TabItem x:Name="AboutTab" Header="About" Classes="nav" x:DataType="vm:AboutViewModel">
+        <ScrollViewer Classes="page">
+          <StackPanel Spacing="10">
+            <StackPanel Classes="actionRow">
+              <TextBlock Text="About" Classes="pageTitle"/>
+              <c:HelpDot
+                  Explanation="The version is the number this build was compiled with. Check for updates reads the project's latest published release and compares it with that version: nothing is downloaded or installed, the release page opens in your browser."/>
+            </StackPanel>
+
+            <Border Classes="card page">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                <!-- the app's own mark: the same bitmap the window icon uses, so they cannot drift -->
+                <Image Source="/Assets/app.png" Width="48" Height="48" Stretch="Uniform"
+                       VerticalAlignment="Top"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"
+                       AutomationProperties.Name="Hakata icon"/>
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding SoftwareName}" Classes="title" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding VersionLabel}" Classes="field" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Classes="hint"
+                             Text="Desktop text translator, wired to your own provider - any OpenAI-compatible chat completions API."/>
+                  <Button Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Left"
+                          IsVisible="{Binding HasRepository}" Command="{Binding OpenRepositoryCommand}"
+                          ToolTip.Tip="Open the project page in your browser"
+                          AutomationProperties.Name="Open the project page">
+                    <TextBlock Classes="link" Text="Project page"/>
+                  </Button>
+                  <!-- GPLv3 asks the program to state its license where a user can read it -->
+                  <StackPanel Classes="actionRow">
+                    <TextBlock Classes="field" Text="{Binding Copyright}" VerticalAlignment="Center"/>
+                    <TextBlock Classes="field" Text="·" VerticalAlignment="Center"/>
+                    <TextBlock Classes="field" Text="{Binding LicenseLabel}" VerticalAlignment="Center"/>
+                    <Button Background="Transparent" BorderThickness="0" Padding="0"
+                            Command="{Binding OpenLicenseCommand}"
+                            ToolTip.Tip="Open the GNU General Public License v3 page in your browser"
+                            AutomationProperties.Name="Open the GPL-3.0 license">
+                      <TextBlock Classes="link" Text="License"/>
+                    </Button>
+                  </StackPanel>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <Border Classes="card page">
+              <StackPanel>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="Updates" Classes="title" VerticalAlignment="Center"/>
+                  <Button Grid.Column="1" Content="Check for updates" Padding="10,4"
+                          Command="{Binding CheckCommand}"
+                          ToolTip.Tip="Read the latest published release and compare it with this build"
+                          AutomationProperties.Name="Check for updates"/>
+                </Grid>
+                <CheckBox IsChecked="{Binding AutoCheck, Mode=TwoWay}"
+                          ToolTip.Tip="Read the release feed quietly when the app starts; only a newer release shows itself, as the Update icon on the Settings button">
+                  <TextBlock Text="Check for updates at launch" Classes="small"/>
+                </CheckBox>
+                <TextBlock Classes="hint" IsVisible="{Binding NoReleaseFeed}"
+                           Text="This build has no release feed configured yet, so the check has nothing to read."/>
+                <TextBlock Classes="hint" Text="{Binding Status}" IsVisible="{Binding HasStatus}"/>
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasUpdate}">
+                  <TextBlock Classes="small" Text="{Binding UpdateSummary}" VerticalAlignment="Center"
+                             TextWrapping="Wrap"/>
+                  <!-- the notes live in the update window; this reopens it once it was dismissed -->
+                  <Button Background="Transparent" BorderThickness="0" Padding="0"
+                          Command="{Binding ShowDetailsCommand}"
+                          ToolTip.Tip="Open the update window with the release notes"
+                          AutomationProperties.Name="Show the release notes">
+                    <TextBlock Classes="link" Text="What's new"/>
+                  </Button>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+
+    <!-- footer keeps the actions in one place and the error beside them, not lost at the end of a scroll -->
+    <Border Grid.Row="1" Background="{DynamicResource PanelBg}" BorderBrush="{DynamicResource Line}"
+            BorderThickness="0,1,0,0" Padding="16,10">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock x:Name="ErrorText" Text="{Binding Error}" Classes="hint" Foreground="{DynamicResource Danger}"
+                   VerticalAlignment="Center" Margin="0,0,16,0"/>
+        <StackPanel Grid.Column="1" Orientation="Horizontal">
+          <Button Content="{Binding CancelText}" Command="{Binding CancelCommand}" Padding="14,4"/>
+          <Button Content="Save  Enter" Command="{Binding SaveCommand}" Padding="16,4"
+                  Background="{DynamicResource Accent}" Foreground="{DynamicResource AccentText}"
+                  FontWeight="SemiBold" BorderThickness="0"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

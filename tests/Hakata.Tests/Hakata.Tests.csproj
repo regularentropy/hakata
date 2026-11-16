@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <!-- the harness is an Exe that references the app, so publishing it would ship the app plus every
+         native library beside a test runner; the app project is the only publishable one -->
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- casing matches the real paths: on a case-insensitive mount a mismatched reference makes
+         MSBuild keep a second obj/ and drop the generated XAML partials between builds -->
+    <ProjectReference Include="../../src/hakata/hakata.csproj" />
+  </ItemGroup>
+</Project>

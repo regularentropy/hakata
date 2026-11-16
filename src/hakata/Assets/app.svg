@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="amber" gradientUnits="userSpaceOnUse" x1="0" y1="8" x2="0" y2="248">
+      <stop offset="0" stop-color="#FFD93B"/>
+      <stop offset="1" stop-color="#EDAF0C"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#7A4A00" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- app tile -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#amber)"/>
+
+  <!-- source pane, upper left: two amber lines of text on charcoal -->
+  <g fill="#18181B">
+    <rect x="40" y="44" width="116" height="96" rx="20"/>
+    <rect x="62" y="70" width="72" height="18" rx="9" fill="#F5C518"/>
+    <rect x="62" y="96" width="48" height="18" rx="9" fill="#F5C518"/>
+  </g>
+
+  <!-- target pane, lower right: the amber ring masks the source pane behind it -->
+  <g filter="url(#lift)">
+    <rect x="88" y="104" width="140" height="120" rx="26" fill="url(#amber)"/>
+    <rect x="102" y="118" width="116" height="96" rx="20" fill="#FFFCF2"/>
+    <rect x="124" y="144" width="72" height="18" rx="9" fill="#18181B"/>
+    <rect x="124" y="170" width="48" height="18" rx="9" fill="#18181B"/>
+  </g>
+</svg>

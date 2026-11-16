@@ -1,0 +1,655 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Hakata.ViewModels"
+        xmlns:models="using:Hakata.Models"
+        xmlns:mi="using:Material.Icons.Avalonia"
+        xmlns:c="using:Hakata.Controls"
+        xmlns:infra="using:Hakata.Infrastructure"
+        x:Class="Hakata.Views.MainWindow"
+        x:DataType="vm:TranslateViewModel"
+        Title="Hakata"
+        Icon="/Assets/app.png"
+        Width="1040" Height="700"
+        MinWidth="720" MinHeight="400"
+        Background="{DynamicResource PageBg}"
+        x:CompileBindings="True">
+
+  <Grid RowDefinitions="Auto,*">
+
+    <!-- ===== header ===== -->
+    <Border Grid.Row="0" Background="{DynamicResource PanelBg}" BorderBrush="{DynamicResource Line}"
+            BorderThickness="0,0,0,1" Padding="10,4">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <c:IconButton x:Name="SidebarToggle" Icon="Menu" IconSize="16" Padding="6,2"
+                        Command="{Binding Chrome.ToggleSidebarCommand}" ToolTip.Tip="Toggle sidebar (history)"
+                        AutomationProperties.Name="Toggle history sidebar"/>
+          <TextBlock Text="Translate" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+          <!-- the model the current tier sends, as a button: a provider may refuse a text with one
+               model and accept it with another, so switching must not require opening Settings.
+               On a first run (no provider) it carries the call to action instead. -->
+          <Button x:Name="ModelButton" Classes="providerLabel"
+                  Classes.unconfigured="{Binding !HasProvider}"
+                  Click="OnModelButtonClick" VerticalAlignment="Center" Margin="0,0,2,0"
+                  AutomationProperties.Name="Switch the model the current quality tier sends"
+                  ToolTip.Tip="Switch the model the current quality tier sends. Provider and model pickers are in Settings.">
+            <TextBlock Text="{Binding ModelName}" TextTrimming="CharacterEllipsis" MaxWidth="220"/>
+            <Button.Flyout>
+              <Flyout Placement="Bottom" VerticalOffset="5">
+                <StackPanel Width="300" Spacing="2">
+                  <TextBlock Classes="title" Text="{Binding ModelMenu.ModelMenuTitle}" Margin="8,4,8,2"/>
+                  <TextBlock Classes="hint" Text="{Binding ModelMenu.ModelMenuStatus}" IsVisible="{Binding ModelMenu.HasModelMenuStatus}"
+                             TextWrapping="Wrap" Margin="8,0,8,2"/>
+                  <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding ModelMenu.ModelChoices}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ModelChoice">
+                          <Button Classes="menuRow" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                  Click="OnModelPicked" CommandParameter="{Binding Id}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <mi:MaterialIcon Kind="Check" IconSize="13" IsVisible="{Binding IsCurrent}"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource Accent}"/>
+                              <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                  <Button Classes="menuRow" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                          Click="OnSettings" Content="Provider &amp; models in Settings…"/>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <c:IconButton x:Name="ThemeButton" Icon="{Binding Chrome.ThemeIcon}" IconSize="16" Padding="6,2"
+                        Command="{Binding Chrome.ToggleThemeCommand}" ToolTip.Tip="Appearance: light → dark → follow the OS"
+                        AutomationProperties.Name="Appearance"/>
+          <c:IconButton Icon="{Binding Chrome.SettingsIcon}" IconSize="16" Label="Settings" Padding="8,2" Click="OnSettings"
+                        ToolTip.Tip="{Binding Chrome.SettingsTip}" AutomationProperties.Name="Settings"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== body: sidebar + main ===== -->
+    <!-- col 0 is a fixed-width column the splitter in col 1 drags (pixel next to a star resizes
+         only the pixel one); Min/MaxWidth clamp the drag. Code-behind zeroes it when the sidebar
+         is hidden so the work area reclaims the space. -->
+    <Grid x:Name="BodyGrid" Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <!-- Width is set from AppSettings.DefaultSidebarWidth in code-behind (GridLength takes no x:Static double) -->
+        <ColumnDefinition MinWidth="{x:Static models:AppSettings.MinSidebarWidth}"
+                          MaxWidth="{x:Static models:AppSettings.MaxSidebarWidth}"/>
+        <ColumnDefinition Width="5"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- sidebar: history -->
+      <Border x:Name="Sidebar" Grid.Column="0" Background="{DynamicResource PanelBg}"
+              IsVisible="{Binding Chrome.SidebarVisible}"
+              BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="8">
+
+          <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+            <TextBlock Text="History" Classes="title"
+                       VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}"/>
+            <c:IconButton Grid.Column="1" Icon="Close" Padding="5,1" Command="{Binding Chrome.ToggleSidebarCommand}"
+                          ToolTip.Tip="Hide sidebar" AutomationProperties.Name="Hide sidebar"/>
+          </Grid>
+
+          <WrapPanel Grid.Row="1" Margin="0,6,0,6" ItemSpacing="4">
+            <ToggleButton x:Name="AllTab" Content="History" IsChecked="{Binding History.IsAllFilter, Mode=OneWay}"
+                          Command="{Binding History.ShowAllCommand}"/>
+            <ToggleButton x:Name="FavTab" Content="Favorites" IsChecked="{Binding History.IsFavoritesFilter, Mode=OneWay}"
+                          Command="{Binding History.ShowFavoritesCommand}"/>
+          </WrapPanel>
+
+          <TextBox x:Name="HistorySearch" Grid.Row="2" Text="{Binding History.SearchText, Mode=TwoWay}"
+                   PlaceholderText="Search history" Margin="0,0,0,4"
+                   AutomationProperties.Name="Search history"/>
+
+          <Grid Grid.Row="3">
+            <ListBox x:Name="HistoryList" ItemsSource="{Binding History.Entries}" SelectionMode="Multiple"
+                     SelectionChanged="OnHistorySelectionChanged"
+                     SelectedItem="{Binding History.SelectedEntry, Mode=TwoWay}">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="{Binding History.FavoriteText}" Command="{Binding History.ToggleFavoriteCommand}"/>
+                  <MenuItem Header="Delete selected" Command="{Binding History.DeleteSelectedCommand}"/>
+                </ContextMenu>
+              </ListBox.ContextMenu>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="models:HistoryEntry">
+                  <!-- two lines: the text, then target · age · money with the star at the end of the meta
+                       row — kept out of the first line so a long preview is not shortened by a hidden button -->
+                  <Grid RowDefinitions="Auto,Auto">
+                    <TextBlock Text="{Binding Preview}" Classes="small" TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextMain}"/>
+                    <!-- three columns, not one horizontal stack: a stack measures its children at
+                         their full width, so a long target name pushed the cost text over the star.
+                         The target now trims, the money keeps its width, the star keeps its space. -->
+                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,2,0,0">
+                      <TextBlock Classes="field" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" ToolTip.Tip="{Binding Ago}">
+                        <Run Text="{Binding Target}"/><Run Text=" · "/><Run Text="{Binding AgoShort}"/>
+                      </TextBlock>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                  VerticalAlignment="Center" IsVisible="{Binding HasCost}">
+                        <TextBlock Classes="field" Text="·"/>
+                        <TextBlock Classes="field" Text="{Binding CostShort}"/>
+                      </StackPanel>
+                      <c:IconButton Grid.Column="2" Icon="StarOutline" Padding="4,0" MinHeight="0"
+                                    VerticalAlignment="Center" Classes="rowAction quiet" IsVisible="{Binding !Favorite}"
+                                    Command="{ReflectionBinding $parent[ListBox].DataContext.History.ToggleFavoriteForCommand}"
+                                    CommandParameter="{Binding}" ToolTip.Tip="Add to favorites"
+                                    AutomationProperties.Name="Add entry to favorites"/>
+                      <c:IconButton Grid.Column="2" Icon="Star" Padding="4,0" MinHeight="0"
+                                    VerticalAlignment="Center" Classes="quiet starred" IsVisible="{Binding Favorite}"
+                                    Command="{ReflectionBinding $parent[ListBox].DataContext.History.ToggleFavoriteForCommand}"
+                                    CommandParameter="{Binding}" ToolTip.Tip="Remove from favorites"
+                                    AutomationProperties.Name="Remove entry from favorites"/>
+                    </Grid>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock x:Name="HistoryEmpty" Classes="small" IsVisible="{Binding History.IsEmpty}" Margin="6,16"
+                       TextWrapping="Wrap" TextAlignment="Center" Foreground="{DynamicResource TextFaint}"
+                       Text="{Binding History.EmptyText}"/>
+          </Grid>
+
+          <StackPanel Grid.Row="4" Spacing="4" Margin="0,6,0,0">
+            <!-- action rail: favorite and clear share the row under the list, not the tab row above it.
+                 A centered StackPanel, not a Grid: each button sizes to its own content (no cell to overflow)
+                 and the pair centers as a group in the 210px rail. -->
+            <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+              <c:IconButton x:Name="FavoriteButton" Icon="{Binding History.FavoriteIcon}"
+                            Label="{Binding History.FavoriteText}"
+                            IsEnabled="{Binding History.CanAct}"
+                            Command="{Binding History.ToggleFavoriteCommand}"
+                            ToolTip.Tip="Star the selected or the shown translation"
+                            AutomationProperties.Name="Favorite the selected translation"/>
+              <c:IconButton Icon="Delete" Label="{Binding History.ClearButtonText}"
+                            Command="{Binding History.ClearCommand}" ToolTip.Tip="{Binding History.ClearTip}"
+                            Classes.armed="{Binding History.ClearArmed}"
+                            AutomationProperties.Name="Clear history"/>
+            </StackPanel>
+            <TextBlock x:Name="SpendLabel" Classes="field" Text="{Binding History.SpendLabel}" IsVisible="{Binding History.HasSpend}"
+                       HorizontalAlignment="Center"
+                       ToolTip.Tip="Estimated cost of every translation kept in history"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- gutter between the sidebar and the work area; same pattern as the input/output splitter below -->
+      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="5" ResizeDirection="Columns" Background="Transparent"
+                    IsVisible="{Binding Chrome.SidebarVisible}"
+                    ToolTip.Tip="Drag to resize the history sidebar"/>
+
+      <!-- main column -->
+      <Grid Grid.Column="2" RowDefinitions="Auto,Auto,*,Auto">
+
+        <!-- the language bar and the tier row share one StackPanel so the tier row centers itself:
+             the gap above it is Spacing, the gap below is the input card's top margin, and the two
+             must stay equal (8). No per-row margin arithmetic. -->
+        <StackPanel Grid.Row="0" Spacing="8" Margin="12,8,12,0">
+        <!-- language bar: the source and target fields carry their own chevron, so there is no
+             detached arrow left of the target field and no second tab stop per picker -->
+        <Grid ColumnDefinitions="*,Auto,*" RowDefinitions="Auto,Auto">
+          <AutoCompleteBox x:Name="SourceBox" HorizontalAlignment="Stretch"
+                           MinWidth="140" MinimumPrefixLength="0" PlaceholderText="Detect language"
+                           ItemsSource="{Binding SourceLanguages}"
+                           Text="{Binding SourceText, Mode=TwoWay}"
+                           SelectedItem="{Binding SourceSelected, Mode=TwoWay}"
+                           AutomationProperties.Name="Source language">
+            <AutoCompleteBox.InnerRightContent>
+              <mi:MaterialIcon Kind="MenuDown" IconSize="16" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextMuted}"/>
+            </AutoCompleteBox.InnerRightContent>
+          </AutoCompleteBox>
+          <c:IconButton Grid.Column="1" Icon="ArrowLeftRight" IconSize="18" Margin="4,0" Padding="11,0"
+                        Classes="fieldRow" VerticalAlignment="Stretch"
+                        Command="{Binding SwapCommand}" ToolTip.Tip="Switch languages (needs a source other than detect)"
+                        AutomationProperties.Name="Switch languages"/>
+          <AutoCompleteBox x:Name="TargetBox" Grid.Column="2" HorizontalAlignment="Stretch"
+                           MinWidth="140" MinimumPrefixLength="0" PlaceholderText="Target language"
+                           ItemsSource="{Binding TargetLanguages}"
+                           Text="{Binding TargetText, Mode=TwoWay}"
+                           SelectedItem="{Binding TargetSelected, Mode=TwoWay}"
+                           AutomationProperties.Name="Target language">
+            <AutoCompleteBox.InnerRightContent>
+              <mi:MaterialIcon Kind="MenuDown" IconSize="16" IsHitTestVisible="False"
+                               Foreground="{DynamicResource TextMuted}"/>
+            </AutoCompleteBox.InnerRightContent>
+          </AutoCompleteBox>
+          <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding LanguageHint}" IsVisible="{Binding HasLanguageHint}"
+                     Classes="hint" Foreground="{DynamicResource Warn}" Margin="0,4,0,0"/>
+        </Grid>
+
+        <!-- quality tiers: a WrapPanel arranges every child with the full line height, so
+             VerticalAlignment=Center puts each item on the same midline as the tallest (a button).
+             No per-item bottom margins: they offset each slot and broke that centering. -->
+        <WrapPanel ItemSpacing="6">
+          <TextBlock Classes="field" Text="Quality" VerticalAlignment="Center"/>
+          <ToggleButton x:Name="BasicTier" Content="Basic" Command="{Binding Chrome.SelectBasicTierCommand}"
+                        IsChecked="{Binding Chrome.IsBasicTier, Mode=OneWay}"
+                        ToolTip.Tip="Fast, everyday translations: ideal for getting the gist quickly."/>
+          <ToggleButton x:Name="StandardTier" Content="Standard" Command="{Binding Chrome.SelectStandardTierCommand}"
+                        IsChecked="{Binding Chrome.IsStandardTier, Mode=OneWay}"
+                        ToolTip.Tip="Accurate translations with natural phrasing, delivered fast."/>
+          <ToggleButton x:Name="BestTier" Content="Best" Command="{Binding Chrome.SelectBestTierCommand}"
+                        IsChecked="{Binding Chrome.IsBestTier, Mode=OneWay}"
+                        ToolTip.Tip="Professional-grade accuracy, but slower and pricier on your provider."/>
+          <TextBlock Classes="field" x:Name="DetectedChip" Text="{Binding Detected}"
+                     VerticalAlignment="Center" IsVisible="{Binding HasDetected}"/>
+          <ToggleButton x:Name="OptionsToggle" Content="More options" Classes="disclosure"
+                        IsChecked="{Binding Chrome.OptionsVisible, Mode=TwoWay}" Padding="8,4"
+                        Margin="14,0,0,0" ToolTip.Tip="Formality, complexity, style, gender of speaker and addressee, context"/>
+        </WrapPanel>
+        </StackPanel>
+
+        <!-- translation options -->
+        <Border Margin="0,5,0,0" x:Name="OptionsPanel" Grid.Row="1" IsVisible="{Binding Chrome.OptionsVisible}" Background="{DynamicResource PanelBg}"
+                BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,1" Padding="12,8">
+          <StackPanel Spacing="6">
+            <!-- tone: three values each, so the pills show every option instead of hiding two behind a dropdown -->
+            <WrapPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Formality" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                <RadioButton Classes="pill" Content="default"
+                             AutomationProperties.Name="Formality: default"
+                             IsChecked="{Binding Chrome.FormalityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=0}"
+                             Command="{Binding Chrome.SetFormalityCommand}" CommandParameter="0"/>
+                <RadioButton Classes="pill" Content="formal"
+                             AutomationProperties.Name="Formality: formal"
+                             IsChecked="{Binding Chrome.FormalityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=1}"
+                             Command="{Binding Chrome.SetFormalityCommand}" CommandParameter="1"/>
+                <RadioButton Classes="pill" Content="informal"
+                             AutomationProperties.Name="Formality: informal"
+                             IsChecked="{Binding Chrome.FormalityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=2}"
+                             Command="{Binding Chrome.SetFormalityCommand}" CommandParameter="2"/>
+              </StackPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Complexity" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                <RadioButton Classes="pill" Content="simple"
+                             AutomationProperties.Name="Complexity: simple"
+                             IsChecked="{Binding Chrome.ComplexityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=0}"
+                             Command="{Binding Chrome.SetComplexityCommand}" CommandParameter="0"/>
+                <RadioButton Classes="pill" Content="standard"
+                             AutomationProperties.Name="Complexity: standard"
+                             IsChecked="{Binding Chrome.ComplexityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=1}"
+                             Command="{Binding Chrome.SetComplexityCommand}" CommandParameter="1"/>
+                <RadioButton Classes="pill" Content="complex"
+                             AutomationProperties.Name="Complexity: complex"
+                             IsChecked="{Binding Chrome.ComplexityIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=2}"
+                             Command="{Binding Chrome.SetComplexityCommand}" CommandParameter="2"/>
+              </StackPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Style" VerticalAlignment="Center" Margin="0,0,2,0"/>
+                <RadioButton Classes="pill" Content="natural"
+                             AutomationProperties.Name="Style: natural"
+                             IsChecked="{Binding Chrome.StyleIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=0}"
+                             Command="{Binding Chrome.SetStyleCommand}" CommandParameter="0"/>
+                <RadioButton Classes="pill" Content="literal"
+                             AutomationProperties.Name="Style: literal"
+                             IsChecked="{Binding Chrome.StyleIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=1}"
+                             Command="{Binding Chrome.SetStyleCommand}" CommandParameter="1"/>
+                <RadioButton Classes="pill" Content="creative"
+                             AutomationProperties.Name="Style: creative"
+                             IsChecked="{Binding Chrome.StyleIndex, Converter={x:Static infra:IndexMatchConverter.Instance}, ConverterParameter=2}"
+                             Command="{Binding Chrome.SetStyleCommand}" CommandParameter="2"/>
+              </StackPanel>
+            </WrapPanel>
+
+            <!-- audience and preset: the three controls that describe who is talking to whom -->
+            <WrapPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Speaker" VerticalAlignment="Center" Margin="0,0,2,0"
+                           ToolTip.Tip="Gender of the person the text is about"/>
+                <ComboBox x:Name="SpeakerBox" Width="130" AutomationProperties.Name="Speaker gender"
+                          SelectedIndex="{Binding Chrome.SpeakerIndex, Mode=TwoWay}">
+                  <ComboBoxItem Content="unspecified"/>
+                  <ComboBoxItem Content="male"/>
+                  <ComboBoxItem Content="female"/>
+                </ComboBox>
+              </StackPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Addressee" VerticalAlignment="Center" Margin="0,0,2,0"
+                           ToolTip.Tip="Gender of the person being spoken to"/>
+                <ComboBox x:Name="AddresseeBox" Width="130" AutomationProperties.Name="Addressee gender"
+                          SelectedIndex="{Binding Chrome.AddresseeIndex, Mode=TwoWay}">
+                  <ComboBoxItem Content="unspecified"/>
+                  <ComboBoxItem Content="male"/>
+                  <ComboBoxItem Content="female"/>
+                </ComboBox>
+              </StackPanel>
+              <StackPanel Classes="optGroup">
+                <TextBlock Classes="field" Text="Preset" VerticalAlignment="Center" Margin="0,0,2,0"
+                           ToolTip.Tip="“· modified” means the tone options were edited by hand after the preset was applied; re-selecting the preset restores them"/>
+                <TextBlock Classes="hint" Text="· modified" VerticalAlignment="Center"
+                           IsVisible="{Binding Presets.IsModified}"/>
+                <ComboBox x:Name="PresetBox" Width="170" PlaceholderText="no preset"
+                          AutomationProperties.Name="Translation preset"
+                          ItemsSource="{Binding Presets.Items}" SelectedItem="{Binding Presets.SelectedPreset, Mode=TwoWay}"
+                          ToolTip.Tip="A preset carries context and tone options, e.g. Minecraft Gaming. The context box below edits the selected preset. Ctrl+1…9 picks a preset, Ctrl+P cycles through them.">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="models:TranslationPreset">
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding Name}"/>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <c:IconButton x:Name="SavePresetButton" Icon="BookmarkPlus" Label="New…" Classes="fieldRow optAction"
+                              ToolTip.Tip="Save the current context and options as a named preset">
+                  <c:IconButton.Flyout>
+                    <Flyout Placement="Bottom">
+                      <StackPanel Width="270" Spacing="6">
+                        <TextBlock Text="Preset name" Classes="title"/>
+                        <TextBox x:Name="NewPresetBox" Text="{Binding Presets.NewPresetName, Mode=TwoWay}"
+                                 PlaceholderText="Minecraft Gaming"/>
+                        <Button Content="Save as preset" Command="{Binding Presets.AddPresetCommand}" Padding="8,2"
+                                HorizontalAlignment="Left"
+                                AutomationProperties.Name="Save the context as a preset"/>
+                        <Button Content="Rename selected" Command="{Binding Presets.RenamePresetCommand}" Padding="8,2"
+                                HorizontalAlignment="Left"
+                                AutomationProperties.Name="Rename the selected preset"/>
+                        <TextBlock Classes="hint" Text="Saving under an existing name overwrites that preset. Rename keeps its identity and the current selection. The context box below edits the selected preset."
+                                    TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Flyout>
+                  </c:IconButton.Flyout>
+                </c:IconButton>
+                <!-- editing a preset that does not exist yet needs no controls at all -->
+                <c:IconButton x:Name="ClearPresetButton" Icon="Close" Classes="fieldRow optAction"
+                              IsVisible="{Binding Presets.HasPreset}"
+                              Command="{Binding Presets.ClearPresetCommand}"
+                              ToolTip.Tip="Stop using a preset and edit the plain context again"
+                              AutomationProperties.Name="Clear the selected preset"/>
+                <c:IconButton x:Name="DeletePresetButton" Icon="Delete" Label="{Binding Presets.DeleteText}"
+                              Classes="fieldRow optAction" Classes.armed="{Binding Presets.DeleteArmed}"
+                              IsVisible="{Binding Presets.HasPreset}"
+                              Command="{Binding Presets.DeletePresetCommand}" ToolTip.Tip="{Binding Presets.DeleteTip}"
+                              AutomationProperties.Name="Delete the selected preset"/>
+              </StackPanel>
+            </WrapPanel>
+            <TextBlock Classes="field" Text="{Binding Presets.ContextLabel}"/>
+            <TextBox x:Name="ContextBox" Classes="small" AcceptsReturn="True" Height="42" TextWrapping="Wrap"
+                     AutomationProperties.Name="Translation context"
+                     Text="{Binding Presets.Context, Mode=TwoWay}"/>
+          </StackPanel>
+        </Border>
+
+        <!-- input | output: two cards on the grey work area, the gutter between them is the splitter -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,12,*" Background="{DynamicResource WorkBg}">
+          <!-- MinWidth stops the splitter from crushing a pane past its toolbar's last wrap row -->
+          <Border Grid.Column="0" MinWidth="170" Background="{DynamicResource PageBg}"
+                  BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="10"
+                  Margin="10,8,0,10">
+            <Grid RowDefinitions="Auto,*">
+            <!-- pane header: the label owns the left edge, the actions sit in one fixed row on the right,
+                 icon-only so they never wrap the row and push the text down -->
+            <Border Classes="paneHead">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Classes="paneTitle" Text="Source" VerticalAlignment="Center"
+                         ToolTip.Tip="Type here to translate. Ctrl+K puts the caret in the source box from anywhere"/>
+              <!-- star column: the buttons keep to one row until the pane is squeezed to its MinWidth -->
+              <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <c:IconButton x:Name="PasteButton" Icon="ContentPaste" Classes="paneAction"
+                              Click="OnPaste" ToolTip.Tip="Paste from clipboard (Ctrl+V / Ctrl+Shift+V)"
+                              AutomationProperties.Name="Paste from the clipboard"/>
+                <c:IconButton x:Name="MicButton" Icon="{Binding Dictation.MicIcon}" Classes="paneAction"
+                              Command="{Binding Dictation.ToggleMicCommand}" IsEnabled="{Binding Dictation.MicEnabled}"
+                              ToolTip.Tip="{Binding Dictation.MicTip}"
+                              AutomationProperties.Name="Dictate the source text with the microphone"/>
+                <c:IconButton x:Name="ClearInputButton" Icon="Eraser" Classes="paneAction"
+                              Command="{Binding ClearInputCommand}"
+                              ToolTip.Tip="Empty the source and its translation"
+                              AutomationProperties.Name="Clear the source and the translation"/>
+              </WrapPanel>
+            </Grid>
+            </Border>
+            <ScrollViewer x:Name="InputScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                          PointerPressed="OnInputAreaClick">
+              <!-- auto height so the transliteration line sits under the text, not at the pane floor -->
+              <!-- top inset keeps the first line of text off the header hairline; same value in the output body -->
+              <Grid Margin="12,10,12,12" RowDefinitions="Auto,Auto">
+                <Grid>
+                  <TextBox x:Name="InputBox" Classes="bare body" AcceptsReturn="True" TextWrapping="Wrap"
+                           Background="Transparent"
+                           Text="{Binding InputText, Mode=TwoWay}" VerticalContentAlignment="Top"
+                           AutomationProperties.Name="Text to translate"/>
+                  <TextBlock x:Name="InputHint" IsVisible="{Binding InputHintVisible}" IsHitTestVisible="False"
+                             Margin="0,1" Classes="body" Foreground="{DynamicResource TextFaint}" VerticalAlignment="Top"
+                             Text="Start typing or paste text…"/>
+                </Grid>
+                <TextBlock x:Name="InputTranslit" Grid.Row="1" Classes="hint" FontStyle="Italic" Margin="0,4,0,0"
+                           Text="{Binding TranslitSource}" IsVisible="{Binding HasTranslitSource}"
+                           ToolTip.Tip="The source text in Latin letters"
+                           AutomationProperties.Name="Source transliteration"/>
+              </Grid>
+            </ScrollViewer>
+            </Grid>
+          </Border>
+
+          <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="Transparent"
+                        ToolTip.Tip="Drag to resize the panes"/>
+
+          <Border Grid.Column="2" MinWidth="170" Background="{DynamicResource PageBg}"
+                  BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="10"
+                  Margin="0,8,10,10">
+            <Grid RowDefinitions="Auto,*">
+            <Border Classes="paneHead">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Classes="paneTitle" Text="Translation" VerticalAlignment="Center"
+                         ToolTip.Tip="What the provider returned for the source text"/>
+              <!-- star column: the buttons keep to one row until the pane is squeezed to its MinWidth -->
+              <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <c:IconButton x:Name="CopyButton" Icon="ContentCopy" Classes="paneAction"
+                              Click="OnCopy" ToolTip.Tip="Copy the translation to the clipboard (Ctrl+C on a selection)"
+                              AutomationProperties.Name="Copy the translation"/>
+                <c:IconButton x:Name="FavoriteOutputButton" Icon="{Binding History.FavoriteIcon}"
+                              Classes="paneAction" Command="{Binding History.ToggleFavoriteCommand}"
+                              IsEnabled="{Binding History.CanAct}" ToolTip.Tip="{Binding History.FavoriteText}"
+                              AutomationProperties.Name="Favorite this translation"/>
+                <c:IconButton x:Name="SpeakButton" Icon="{Binding Speak.SoundIcon}" Classes="paneAction"
+                              Command="{Binding Speak.ToggleCommand}" IsEnabled="{Binding ExtrasEnabled}"
+                              ToolTip.Tip="{Binding Speak.SoundTip}"
+                              AutomationProperties.Name="Read the translation aloud"/>
+                <c:IconButton x:Name="ExportSoundButton" Icon="Download" Classes="paneAction"
+                              Click="OnExportSound" IsEnabled="{Binding ExtrasEnabled}"
+                              ToolTip.Tip="Save the spoken translation as an audio file"
+                              AutomationProperties.Name="Export the spoken translation as an audio file"/>
+                <c:IconButton x:Name="AlternativesButton" Icon="CompareHorizontal" Classes="paneAction"
+                              Command="{Binding AlternativesCommand}" IsEnabled="{Binding ExtrasEnabled}"
+                              ToolTip.Tip="Ask for 3 alternative renderings"
+                              AutomationProperties.Name="Alternative translations"/>
+                <c:IconButton x:Name="InsightsButton" Icon="Spellcheck" Classes="paneAction"
+                              Command="{Binding InsightsCommand}" IsEnabled="{Binding ExtrasEnabled}"
+                              ToolTip.Tip="Nuance variants for individual words"
+                              AutomationProperties.Name="Word insights"/>
+              </WrapPanel>
+            </Grid>
+            </Border>
+            <ScrollViewer x:Name="OutputScroll" Grid.Row="1">
+              <StackPanel Classes.stale="{Binding IsStale}" Margin="12,10,12,12" Spacing="12">
+                <Grid>
+                  <TextBox x:Name="OutputBox" Classes="bare body" Text="{Binding OutputText, Mode=OneWay}" AcceptsReturn="True"
+                           TextWrapping="Wrap" IsReadOnly="True"
+                           Background="Transparent"
+                           VerticalContentAlignment="Top"
+                           AutomationProperties.Name="Translation result"/>
+                  <TextBlock x:Name="OutputHint" IsVisible="{Binding OutputHintVisible}" IsHitTestVisible="False"
+                             Margin="0,1" Classes="body" Foreground="{DynamicResource TextFaint}" VerticalAlignment="Top"
+                             Text="The translation appears here"/>
+                </Grid>
+
+                <TextBlock x:Name="OutputTranslit" Classes="hint" FontStyle="Italic"
+                           Text="{Binding TranslitTarget}" IsVisible="{Binding HasTranslitTarget}"
+                           ToolTip.Tip="The translation in Latin letters"
+                           AutomationProperties.Name="Translation transliteration"/>
+
+                <Border x:Name="AlternativesPanel" Classes="card" IsVisible="{Binding AlternativesVisible}">
+                  <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="Alternative translations" Classes="title"/>
+                      <c:IconButton Grid.Column="1" Icon="Close" Padding="5,1" VerticalAlignment="Top"
+                                    Command="{Binding CloseAlternativesCommand}"
+                                    ToolTip.Tip="Close and do not keep these in history"
+                                    AutomationProperties.Name="Close alternative translations"/>
+                    </Grid>
+                    <TextBlock x:Name="AlternativesDescription" Text="{Binding AlternativesDescription}"
+                               Classes="small muted" TextWrapping="Wrap"
+                               Classes.error="{Binding AlternativesFailed}"/>
+                    <ItemsControl x:Name="AlternativesList" ItemsSource="{Binding Alternatives}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:Alternative">
+                          <Border Background="{DynamicResource ChipBg}" CornerRadius="6" Padding="10,8" Margin="0,2">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding Text}" Classes="title" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Explanation}" Classes="small" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource TextMuted}" IsVisible="{Binding HasExplanation}"/>
+                              </StackPanel>
+                              <c:IconButton Grid.Column="1" Icon="ContentCopy" Padding="7,3" Margin="8,0,0,0"
+                                            VerticalAlignment="Top" Click="OnCopyAlternative"
+                                            ToolTip.Tip="Copy this alternative to the clipboard"
+                                            AutomationProperties.Name="Copy this alternative"/>
+                            </Grid>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+                <Border x:Name="InsightsPanel" Classes="card" IsVisible="{Binding InsightsVisible}">
+                  <StackPanel Spacing="6">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="Word insights" Classes="title"/>
+                      <c:IconButton Grid.Column="1" Icon="Close" Padding="5,1" VerticalAlignment="Top"
+                                    Command="{Binding CloseInsightsCommand}"
+                                    ToolTip.Tip="Close and do not keep these in history"
+                                    AutomationProperties.Name="Close word insights"/>
+                    </Grid>
+                    <ItemsControl x:Name="InsightsList" ItemsSource="{Binding Insights}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:WordInsight">
+                          <StackPanel Spacing="3" Margin="0,3">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <TextBlock Text="{Binding Word}" Classes="title"/>
+                              <TextBlock Classes="field" Text="{Binding Kind}"  VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding Alternatives}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:Alternative">
+                                  <TextBlock Classes="small" TextWrapping="Wrap" Margin="0,1"
+                                             Text="{Binding Text}" Foreground="{DynamicResource TextMain}"
+                                             ToolTip.Tip="{Binding Explanation}"/>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+            </Grid>
+          </Border>
+        </Grid>
+
+        <!-- footer -->
+        <Border Grid.Row="3" Background="{DynamicResource PanelBg}" BorderBrush="{DynamicResource Line}"
+                BorderThickness="0,1,0,0" Padding="12,0">
+          <Grid RowDefinitions="Auto,Auto">
+            <!-- the bar keeps its row while hidden: collapsing it moved the footer 6px on every run -->
+            <Grid Grid.Row="0" Height="6">
+              <ProgressBar IsIndeterminate="True" Height="3" Margin="0,0,0,3" VerticalAlignment="Top"
+                           IsVisible="{Binding IsBusy}" Background="Transparent"
+                           Foreground="{DynamicResource Accent}" AutomationProperties.Name="Translation in progress"/>
+            </Grid>
+
+            <!-- bottom margin only: the 6px bar row above already balances it, so the row stays vertically centered -->
+            <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,*" VerticalAlignment="Center" Margin="0,0,8,0">
+                <TextBlock Classes="field" x:Name="CharCount" Text="{Binding CharCount}" 
+                            Margin="0,0,12,0"/>
+                <Button x:Name="UsageChip" Grid.Column="1" Padding="0" Margin="0,0,12,0" Background="Transparent"
+                        BorderThickness="0" AutomationProperties.Name="Set the token price"
+                        ToolTip.Tip="Tokens for the request (↑) and the response (↓), and what this pass cost. Click to set the price per 1M tokens.">
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Classes="field" Text="{Binding Usage.UsageLabel}"   IsVisible="{Binding Usage.HasUsage}"/>
+                    <TextBlock Classes="link" Text="Set token price" IsVisible="{Binding Usage.NoUsage}"/>
+                  </StackPanel>
+                  <Button.Flyout>
+                    <Flyout Placement="Top">
+                      <Flyout.FlyoutPresenterClasses>
+                        <x:String>compact</x:String>
+                      </Flyout.FlyoutPresenterClasses>
+                      <!-- no fixed width: sizes to the two rows. Fields use the app's 32px NumericUpDown style
+                           (26px clipped the Fluent text area); the spinner buttons are hidden because their
+                           34px column made the fields look huge — ↑/↓ keys still adjust the value. -->
+                      <StackPanel Spacing="6">
+                        <TextBlock Text="Price per 1M tokens" Classes="title"/>
+                        <Grid ColumnDefinitions="Auto,6,Auto,*,Auto,4,Auto" RowDefinitions="Auto,Auto" RowSpacing="6">
+                          <!-- the arrows echo the cost chip: same glyphs, accent colour -->
+                          <TextBlock Grid.Row="0" Text="↑" Classes="field" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource Accent}" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Row="0" Grid.Column="2" Text="Request" Classes="field" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Row="0" Grid.Column="4" Text="$" Classes="field" VerticalAlignment="Center"/>
+                          <NumericUpDown Grid.Row="0" Grid.Column="6" Classes="price"
+                                         Value="{Binding Usage.InputPrice, Mode=TwoWay}"
+                                         AutomationProperties.Name="Request price per million tokens"/>
+                          <TextBlock Grid.Row="1" Text="↓" Classes="field" FontWeight="SemiBold"
+                                     Foreground="{DynamicResource Accent}" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Row="1" Grid.Column="2" Text="Response" Classes="field" VerticalAlignment="Center"/>
+                          <TextBlock Grid.Row="1" Grid.Column="4" Text="$" Classes="field" VerticalAlignment="Center"/>
+                          <NumericUpDown Grid.Row="1" Grid.Column="6" Classes="price"
+                                         Value="{Binding Usage.OutputPrice, Mode=TwoWay}"
+                                         AutomationProperties.Name="Response price per million tokens"/>
+                        </Grid>
+                        <TextBlock Classes="hint" Text="Cost = tokens × price. 0 shows counts only." TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+                <TextBlock Grid.Column="2" Text="Long input — the provider may reject it" Classes="field"
+                           Foreground="{DynamicResource Warn}" Margin="0,0,12,0" IsVisible="{Binding IsLongInput}"/>
+                <SelectableTextBlock x:Name="Status" Grid.Column="3" Text="{Binding StatusDisplay}"
+                                     Classes="status" Classes.error="{Binding IsError}"
+                                     AutomationProperties.Name="Status" AutomationProperties.LiveSetting="Polite"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Status}"/>
+              </Grid>
+              <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" ItemSpacing="4">
+                <c:IconButton Icon="Refresh" Label="Retry" Command="{Binding TranslateCommand}"
+                              IsVisible="{Binding IsError}" Classes="footerAction"
+                              ToolTip.Tip="Run the same translation again"
+                              AutomationProperties.Name="Retry the translation"/>
+                <c:IconButton Icon="PlusThick" Label="New" Click="OnNew"
+                              Classes="footerAction"
+                              ToolTip.Tip="Start a new translation — clears both panes and puts the caret in the source box (Ctrl+N)"
+                              AutomationProperties.Name="Start a new translation"/>
+                <c:IconButton x:Name="StopButton" Icon="Stop" Label="Stop" Command="{Binding StopCommand}"
+                              IsVisible="{Binding IsBusy}" Classes="footerAction"
+                              ToolTip.Tip="Stop the running translation (Esc)"
+                              AutomationProperties.Name="Stop the translation"/>
+                <c:IconButton x:Name="TranslateButton" Icon="Translate" IconSize="16" Label="Translate"
+                              Command="{Binding TranslateCommand}" IsVisible="{Binding NotBusy}" Padding="12,3"
+                              IsEnabled="{Binding HasProvider}"
+                              ToolTip.Tip="Translate the source text (Ctrl+Enter). Grey while no provider is connected."
+                              Background="{DynamicResource Accent}" Foreground="{DynamicResource AccentText}"
+                              FontWeight="SemiBold" BorderThickness="0"/>
+              </WrapPanel>
+            </Grid>
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>
