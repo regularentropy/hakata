@@ -36,9 +36,12 @@ public partial class SettingsWindow : Window
         viewModel.CloseRequested += (_, _) => Close();
         // closing abandons the view model; its pending probe must not keep running past the dialog
         Closed += (_, _) => viewModel.Providers.CancelPending();
-        // the button labels the current protection state of the key file
+        // the button labels the current protection state of the key file; an unreadable key file
+        // (e.g. chmod 000) must not brick the window — the handlers re-read it under SafeUi.Guard
         var keyPath = HistoryCrypto.KeyPath(dir);
-        var isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(File.ReadAllText(keyPath));
+        var isPassword = false;
+        try { isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(File.ReadAllText(keyPath)); }
+        catch (Exception) { }
         HistoryPasswordButton.Content = isPassword
             ? "Remove password protection"
             : "Protect history with a password";

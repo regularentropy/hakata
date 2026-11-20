@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text.Json;
 using Hakata.Infrastructure;
 using Hakata.Models;
@@ -27,11 +28,21 @@ public static class SseParser
                 ? amount : null;
             return new TokenUsage(prompt ?? 0, completion ?? 0, Estimated: false, ReportedCost: cost);
         }
-        catch (JsonException) { return null; }
+        catch (Exception) { return null; } // a malformed usage line (string/float counters, junk) is not fatal
     }
 
-    static int? IntOf(JsonElement el, string name) =>
-        el.TryGetProperty(name, out var value) && value.TryGetInt32(out var number) ? number : null;
+    // some providers send the counters as strings ("42") or floats (42.0); both must count, not throw or drop
+    static int? IntOf(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var value)) return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt32(out var i) => i,
+            JsonValueKind.Number when value.TryGetDouble(out var d) => (int)d,
+            JsonValueKind.String when double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s) => (int)s,
+            _ => null,
+        };
+    }
 
     /// <summary>The finish_reason of one SSE line, or empty when the line carries none.</summary>
     public static string ParseSseFinish(string line)

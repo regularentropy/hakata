@@ -121,6 +121,8 @@ internal static class HistoryCrypto
     // or changing a password rewrites only this small file, and a copied folder + the password unlocks
     // the store on any machine
     const int Pbkdf2Iterations = 600_000;
+    // a crafted key-file header must not turn unlock into a hours-long PBKDF2 grind (DoS)
+    const int MaxPbkdf2Iterations = 10_000_000;
 
     /// <summary>pwd:v1:salt:iterations:nonce:tag:wrapped — PBKDF2-SHA256 derives the KEK, AES-GCM wraps the DEK.</summary>
     public static string WrapPassword(byte[] dek, string password)
@@ -143,8 +145,9 @@ internal static class HistoryCrypto
         {
             var parts = header.Split(':');
             if (parts.Length != 7 || parts[0] != "pwd" || parts[1] != "v1") return null;
+            if (!int.TryParse(parts[3], out var iterations) || iterations is < 1 or > MaxPbkdf2Iterations) return null;
             var kek = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password),
-                Convert.FromBase64String(parts[2]), int.Parse(parts[3]), HashAlgorithmName.SHA256, 32);
+                Convert.FromBase64String(parts[2]), iterations, HashAlgorithmName.SHA256, 32);
             var wrapped = Convert.FromBase64String(parts[6]);
             var dek = new byte[wrapped.Length];
             using var gcm = new AesGcm(kek, TagSize);

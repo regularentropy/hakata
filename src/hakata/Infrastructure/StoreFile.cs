@@ -135,6 +135,8 @@ internal static class StoreFile
                 var candidate = i == 0 ? path + suffix : $"{path}{suffix}-{i + 1}";
                 if (File.Exists(candidate)) continue;
                 File.Move(path, candidate, overwrite: false);
+                // a moved-aside plaintext store keeps its 0644 mode otherwise — the copy is private history
+                RestrictFile(candidate);
                 return Path.GetFileName(candidate);
             }
         }

@@ -86,6 +86,14 @@ public static partial class SelfTest
 
         var usage = SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}");
         Check(usage is { PromptTokens: 12, CompletionTokens: 7, Estimated: false }, "sse: usage chunk parsed");
+        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"42\",\"completion_tokens\":\"7\"}}")
+              is { PromptTokens: 42, CompletionTokens: 7 },
+            "sse: string usage counters are parsed, not thrown");
+        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42.0,\"completion_tokens\":7.9}}")
+              is { PromptTokens: 42, CompletionTokens: 7 },
+            "sse: float usage counters count, not dropped");
+        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":true}}") is null,
+            "sse: a non-numeric usage counter is ignored, not fatal");
         Check(SseParser.ParseSseUsage("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") is null,
             "sse: a content chunk is not usage");
         Check(SseParser.ParseSseUsage("data: [DONE]") is null, "sse: done marker is not usage");

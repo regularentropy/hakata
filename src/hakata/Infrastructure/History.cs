@@ -160,16 +160,24 @@ public sealed class History : IDisposable
         return tmpDir;
     }
 
-    /// <summary>Best-effort sweep of the .tmp scratch files a killed save/load left behind.</summary>
+    /// <summary>Best-effort sweep of the .tmp scratch files a killed save/load left behind. The patterns
+    /// also match an in-flight Save's temp files, so only files old enough that no live save can still be
+    /// writing them are stale — deleting a live one makes that Save fail.</summary>
     void SweepStaleTemp()
     {
         var tmpDir = Path.Combine(dir, ".tmp");
         if (!Directory.Exists(tmpDir)) return;
         try
         {
+            var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(10);
             foreach (var pattern in new[] { "history.db.tmp-*", "history.db.load-*" })
                 foreach (var file in Directory.GetFiles(tmpDir, pattern))
-                    try { File.Delete(file); } catch (Exception) { }
+                    try
+                    {
+                        if (File.GetLastWriteTimeUtc(file) > cutoff) continue; // maybe a live save's temp
+                        File.Delete(file);
+                    }
+                    catch (Exception) { }
         }
         catch (Exception) { }
     }

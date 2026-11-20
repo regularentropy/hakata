@@ -348,6 +348,15 @@ public static partial class SelfTest
             Check(HistoryCrypto.UnwrapPassword(headerTwo, "pw-one") is null,
                 "password: the old password no longer unwraps after a change");
 
+            // a crafted header must not turn unlock into a hours-long PBKDF2 grind
+            var hugeParts = HistoryCrypto.WrapPassword(dek!, "pw").Split(':');
+            hugeParts[3] = "2000000000";
+            Check(HistoryCrypto.UnwrapPassword(string.Join(':', hugeParts), "pw") is null,
+                "password: an out-of-range PBKDF2 iteration count is rejected");
+            hugeParts[3] = "0";
+            Check(HistoryCrypto.UnwrapPassword(string.Join(':', hugeParts), "pw") is null,
+                "password: a zero PBKDF2 iteration count is rejected");
+
             // the settings dialog replaces the key file tmp+rename: nothing left behind, owner-only
             // off Windows, and the wrap still reads back (the dialog's private helper does exactly
             // this WriteRestrictedBytes + Move + RestrictFile sequence)
@@ -507,15 +516,23 @@ public static partial class SelfTest
                       && Directory.GetFiles(homeDir, "*.enc").Length == 0
                       && Directory.GetFiles(homeDir, "*.check").Length == 0,
                     "history: no plaintext temp sits in the 0755 profile dir after a save");
-                // a killed save leaves its temp in .tmp; the next Load sweeps it
+                // a killed save leaves its temp in .tmp; the next Load sweeps it once it is old —
+                // a fresh temp may belong to an in-flight save and must be left alone
                 File.WriteAllBytes(Path.Combine(tmpSub, "history.db.tmp-stale"), new byte[] { 1, 2, 3 });
                 File.WriteAllBytes(Path.Combine(tmpSub, "history.db.tmp-stale.enc"), new byte[] { 4, 5, 6 });
                 File.WriteAllBytes(Path.Combine(tmpSub, "history.db.load-stale"), new byte[] { 7, 8, 9 });
+                File.WriteAllBytes(Path.Combine(tmpSub, "history.db.tmp-live"), new byte[] { 10, 11 });
+                var hourAgo = DateTime.UtcNow - TimeSpan.FromHours(1);
+                File.SetLastWriteTimeUtc(Path.Combine(tmpSub, "history.db.tmp-stale"), hourAgo);
+                File.SetLastWriteTimeUtc(Path.Combine(tmpSub, "history.db.tmp-stale.enc"), hourAgo);
+                File.SetLastWriteTimeUtc(Path.Combine(tmpSub, "history.db.load-stale"), hourAgo);
                 new History(homeDir).Load();
                 Check(!File.Exists(Path.Combine(tmpSub, "history.db.tmp-stale"))
                       && !File.Exists(Path.Combine(tmpSub, "history.db.tmp-stale.enc"))
                       && !File.Exists(Path.Combine(tmpSub, "history.db.load-stale")),
                     "history: Load sweeps stale snapshot temp files from .tmp");
+                Check(File.Exists(Path.Combine(tmpSub, "history.db.tmp-live")),
+                    "history: Load leaves a fresh (in-flight save) temp file alone");
             }
             finally
             {
@@ -561,6 +578,9 @@ public static partial class SelfTest
                               && File.ReadAllText(Path.Combine(planted, "history.db.unreadable")).Contains("canary-plain-0061")
                               && !File.Exists(Path.Combine(planted, "history.db")),
                             "history #0061: the planted plaintext store is kept aside, neither loaded nor re-encrypted");
+                        Check((File.GetUnixFileMode(Path.Combine(planted, "history.db.unreadable"))
+                               & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0,
+                            "history #0061: the moved-aside plaintext copy is owner-only, not world-readable");
                     }
                     Directory.Delete(planted, true);
                 }

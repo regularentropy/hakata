@@ -203,6 +203,11 @@ public static class Profiles
         // read the pointer before the move: after it the old name no longer resolves
         var wasActive = NameEquals(ActiveName(baseDir), oldName);
         var newDir = Path.Combine(baseDir, "profiles", newName);
+        // hold the profile's own instance guard across the move: a concurrently launching
+        // instance cannot acquire it in between, so the dir moved is never one it just opened
+        using var guard = new InstanceGuard();
+        if (!guard.TryAcquire(entry.Dir))
+            throw new InvalidOperationException("the profile is running in another instance");
         Directory.Move(entry.Dir, newDir);
         if (wasActive)
         {
@@ -221,6 +226,10 @@ public static class Profiles
         var entry = GuardNotRunning(baseDir, name, "deleted");
         if (NameEquals(ActiveName(baseDir), name))
             throw new InvalidOperationException("the active profile cannot be deleted");
+        // same guard-held move as Rename: the check above can go stale while another instance launches
+        using var guard = new InstanceGuard();
+        if (!guard.TryAcquire(entry.Dir))
+            throw new InvalidOperationException("the profile is running in another instance");
         Directory.Delete(entry.Dir, recursive: true);
     }
 
