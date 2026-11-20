@@ -45,8 +45,6 @@ public sealed class TranslationCoordinator(ITranslationProvider provider, AppSet
         while (Volatile.Read(ref active) > 0) await WhenIdleAsync();
     }
 
-    async Task<T> Track<T>(Task<T> task) { Enter(); try { return await task; } finally { Exit(); } }
-
     /// <summary>Tracks work that starts its own task: Enter runs before <paramref name="work"/> is invoked,
     /// so the counter cannot miss the start (a task started outside the counter lets idle complete early).</summary>
     internal async Task<T> TrackAsync<T>(Func<Task<T>> work)
@@ -121,10 +119,10 @@ public sealed class TranslationCoordinator(ITranslationProvider provider, AppSet
 
     public Task<(string Description, List<Alternative> Items)> AlternativesAsync(
         string source, string existing, string from, string to, Action<TokenUsage>? onUsage = null) =>
-        Track(provider.AlternativesAsync(source, existing, from, to, BeginExtra(ref altCts), onUsage));
+        TrackAsync(() => provider.AlternativesAsync(source, existing, from, to, BeginExtra(ref altCts), onUsage));
 
     public Task<List<WordInsight>> InsightsAsync(string source, string output, string from, string to, Action<TokenUsage>? onUsage = null) =>
-        Track(provider.InsightsAsync(source, output, from, to, BeginExtra(ref insightsCts), onUsage));
+        TrackAsync(() => provider.InsightsAsync(source, output, from, to, BeginExtra(ref insightsCts), onUsage));
 
     /// <summary>
     /// Runs beside a finished translation, so it gets its own token: a new run would cancel
@@ -135,7 +133,7 @@ public sealed class TranslationCoordinator(ITranslationProvider provider, AppSet
     {
         auxCts?.Cancel();
         auxCts = new CancellationTokenSource();
-        return Track(provider.TransliterationAsync(source, output, from, to, auxCts.Token, onUsage));
+        return TrackAsync(() => provider.TransliterationAsync(source, output, from, to, auxCts.Token, onUsage));
     }
 
     /// <summary>Keeps a cancelled run's partial output instead of dropping what the user already sees.</summary>

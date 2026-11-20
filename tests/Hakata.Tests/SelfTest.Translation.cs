@@ -1541,9 +1541,14 @@ public static partial class SelfTest
             string text, string translation, string from, string to, CancellationToken ct, Action<TokenUsage>? onUsage = null) =>
             throw new NotSupportedException();
 
-        public Task<(string Source, string Translation)> TransliterationAsync(
-            string text, string translation, string from, string to, CancellationToken ct, Action<TokenUsage>? onUsage = null) =>
-            throw new NotSupportedException();
+        public async Task<(string Source, string Translation)> TransliterationAsync(
+            string text, string translation, string from, string to, CancellationToken ct, Action<TokenUsage>? onUsage = null)
+        {
+            started?.TrySetResult(); // the request has begun
+            gate?.Wait(); // hold it inside the provider before the first await, like the translate request above
+            await Task.CompletedTask;
+            return (text, translation);
+        }
     }
 
     /// <summary>Idle-counter race: a request that blocks inside the provider must leave WhenIdleAsync and
@@ -1574,6 +1579,18 @@ public static partial class SelfTest
             await WithTimeout(run, "idle race: the released run finishes");
             await WithTimeout(until, "idle race: UntilIdleAsync completes once the run is done");
             Check(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the run");
+
+            // the aux calls must be counted from their very start too: they used to start the provider
+            // task before Enter, so idle could read as completed while the request was already in flight
+            stub.started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            stub.gate = new ManualResetEventSlim(false);
+            var aux = Task.Run(() => coordinator.TransliterationAsync("hello", "Hallo", "en", "de"));
+            await stub.started.Task; // the aux request is in flight inside the provider now
+            Check(!coordinator.WhenIdleAsync().IsCompleted,
+                "idle race: WhenIdleAsync is NOT completed while an aux request is in flight");
+            stub.gate.Set(); // let the fake provider answer
+            await WithTimeout(aux, "idle race: the released aux request finishes");
+            Check(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the aux request");
         }
         finally { try { Directory.Delete(dir, true); } catch (Exception) { } }
     }
