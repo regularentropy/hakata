@@ -13,7 +13,8 @@ public static class AppJson
     public static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        // raw ints are rejected: "Tier": 99 must not load as an undefined enum value
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
     };
 }
 

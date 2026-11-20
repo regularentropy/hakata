@@ -13,6 +13,7 @@ public static class Jsons
     {
         var start = raw.IndexOfAny(['{', '[']);
         if (start < 0) return raw;
+        var close = raw[start] == '{' ? '}' : ']'; // the closer must match the opener
         var depth = 0;
         var inString = false;
         for (var i = start; i < raw.Length; i++)
@@ -26,7 +27,7 @@ public static class Jsons
             }
             if (c == '"') inString = true;
             else if (c is '{' or '[') depth++;
-            else if (c is '}' or ']' && --depth == 0) return raw[start..(i + 1)];
+            else if (c == close && --depth == 0) return raw[start..(i + 1)];
         }
         return raw[start..];
     }

@@ -14,7 +14,7 @@ namespace Hakata.ViewModels;
 
 /// <summary>The main window's state: language picks, the translation run, and the billing that joins them.
 /// Everything around it lives in child view models: <see cref="Chrome"/>, <see cref="History"/>, <see cref="Presets"/>, <see cref="Usage"/>, <see cref="Dictation"/>, <see cref="Speak"/>.</summary>
-public sealed partial class TranslateViewModel : Observable
+public sealed partial class TranslateViewModel : Observable, IDisposable
 {
     readonly SettingsService settingsService;
     readonly TranslationCoordinator coordinator;
@@ -303,6 +303,8 @@ public sealed partial class TranslateViewModel : Observable
         Dictation.Cancel();
         shown++; // chunks still arriving belong to the replaced view
         History.Current = entry;
+        // shownSource first: assigning InputText before it would read as an edit and flicker IsStale
+        shownSource = entry.Source.Trim();
         InputText = entry.Source;
         OutputText = entry.Output;
         SetLanguages(entry.From, entry.To);
@@ -317,8 +319,7 @@ public sealed partial class TranslateViewModel : Observable
         // the romanisation was paid for once: restoring the entry brings it back with the text
         TranslitSource = entry.TranslitSource;
         TranslitTarget = entry.TranslitTarget;
-        shownSource = entry.Source.Trim(); // the restored output matches the restored source
-        IsStale = false;
+        IsStale = false; // the restored output matches the restored source (shownSource set above)
         Status = "Restored from history";
     }
 
@@ -552,6 +553,12 @@ public sealed partial class TranslateViewModel : Observable
         output = OutputText.Trim();
         from = ResolveSource("auto");
         to = ResolveTarget(settings.TargetLang);
+        // an edited source must not be sent to extras and billed onto the entry whose stored source differs
+        if (IsStale)
+        {
+            Status = $"{staleReason} — Ctrl+Enter to retranslate first";
+            return false;
+        }
         if (source.Length > 0 && output.Length > 0) return true;
         Status = "Translate first, then ask for " + what;
         return false;
@@ -591,6 +598,13 @@ public sealed partial class TranslateViewModel : Observable
 
     /// <summary>Completes when no request is in flight — awaited after Cancel so a profile swap never disposes a running graph.</summary>
     public Task WhenIdleAsync() => coordinator.UntilIdleAsync();
+
+    /// <summary>The DI graph disposes this on a profile swap; the child VMs hold subscriptions to shared services.</summary>
+    public void Dispose()
+    {
+        Speak.Dispose();
+        Usage.Dispose();
+    }
 }
 
 /// <summary>One row of the header model switcher: the id to send, its label, and whether it is the active pick.

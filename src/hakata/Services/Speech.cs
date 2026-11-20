@@ -140,8 +140,9 @@ public sealed class SpeechPlayer : ISpeechPlayer
             reader = OpenAudio(path); // inside the try so a bad clip still reaches the delete
             output = NewOut();
             output.PlaybackStopped += (_, _) => done.Set();
-            output.Init(reader);
+            // assigned before the Init/Play gap: a Stop landing in that window must not be lost
             device = output;
+            output.Init(reader);
             output.Play();
             done.Wait(); // ends with the clip, or as soon as Stop reaches the device
         }

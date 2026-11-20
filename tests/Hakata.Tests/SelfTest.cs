@@ -403,7 +403,8 @@ public static partial class SelfTest
         // (the target index equals Count); the sync must ride it out instead of throwing
         var full = new ObservableCollection<SyncRow>([new SyncRow("a")]);
         CollectionSync.InPlace(full, [new SyncRow("a"), new SyncRow("a")]);
-        Check(full.Count == 1, "collection sync: value-equal duplicates with a full collection do not throw");
+        Check(full.Count == 2 && full[0].Id == "a" && full[1].Id == "a",
+            "collection sync: value-equal duplicates are kept, not dropped, and a full collection does not throw");
 
         var reorder = new ObservableCollection<SyncRow>([new SyncRow("b"), new SyncRow("a")]);
         CollectionSync.InPlace(reorder, [new SyncRow("a"), new SyncRow("b")]);

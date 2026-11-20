@@ -11,7 +11,7 @@ namespace Hakata.ViewModels;
 /// Token usage of the last run and the per-million prices that turn it into a cost.
 /// Prices live in the main window, next to the cost they produce, not in the settings dialog.
 /// </summary>
-public sealed partial class UsageViewModel : Observable
+public sealed partial class UsageViewModel : Observable, IDisposable
 {
     readonly SettingsService settingsService;
     readonly IModelCatalog provider;
@@ -30,6 +30,9 @@ public sealed partial class UsageViewModel : Observable
         if (settings.InputPricePerMTok <= 0 && settings.OutputPricePerMTok <= 0 && settings.HasProvider)
             _ = AutoPriceAsync();
     }
+
+    // the settings service outlives a profile swap's view model; an undisposed subscription would leak it
+    public void Dispose() => settingsService.PricesChanged -= OnPricesChanged;
 
     [ObservableProperty] private string usageLabel = "";
 

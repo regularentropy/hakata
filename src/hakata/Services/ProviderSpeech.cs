@@ -111,8 +111,13 @@ public sealed partial class OpenAiCompatibleProvider
 
         async Task<ModelListing?> Fetch()
         {
-            var task = catalogs.GetOrAdd(key, _ => FetchCatalog(route, tts, ct));
-            var list = await task;
+            // the cached task must not capture any one caller's token: one cancel would hand every
+            // concurrent waiter a null ("free"); the fetch runs on its own token, each caller
+            // cancels only its own wait
+            var task = catalogs.GetOrAdd(key, _ => FetchCatalog(route, tts, CancellationToken.None));
+            List<ModelListing>? list;
+            try { list = await task.WaitAsync(ct); }
+            catch (OperationCanceledException) { return null; }
             // a failed or cancelled fetch must not cache its null forever, so drop the entry for a retry (#0057);
             // done after the await because GetOrAdd inserts only once the factory returns
             if (list is null) catalogs.TryRemove(key, out _);

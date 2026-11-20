@@ -234,7 +234,8 @@ public sealed partial class OpenAiCompatibleProvider(HttpClient http, AppSetting
                                billed.TryGetDouble(out var amount) && amount > 0 ? amount : null;
                 onUsage(new TokenUsage(prompt, completion, Estimated: false, ReportedCost: cost));
             }
-            else onUsage?.Invoke(TokenUsage.EstimatedFor(user, content));
+            // the estimate covers the system prompt too: it is sent and billed like the user text
+            else onUsage?.Invoke(TokenUsage.EstimatedFor(system + "\n" + user, content));
             return content;
         }
     }

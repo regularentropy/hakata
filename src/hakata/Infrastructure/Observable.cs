@@ -31,8 +31,9 @@ public static class CollectionSync
             if (at == i) continue;
             // value-equal duplicates in wanted can leave the first match already placed while the
             // collection is exactly full: Move with newIndex == Count throws, so it only runs in
-            // range, and an insert past the end clamps to an append the same way
-            if (at < 0) collection.Insert(Math.Min(i, collection.Count), item);
+            // range, and an insert past the end clamps to an append the same way; a match at < i is
+            // already consumed by an earlier slot, so the duplicate is inserted, not moved
+            if (at < 0 || at < i) collection.Insert(Math.Min(i, collection.Count), item);
             else if (i < collection.Count) collection.Move(at, i);
         }
         while (collection.Count > wanted.Count) collection.RemoveAt(collection.Count - 1);

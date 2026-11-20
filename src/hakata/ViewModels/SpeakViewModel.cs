@@ -16,7 +16,7 @@ namespace Hakata.ViewModels;
 /// The sound button: renders the translation through the provider's /audio/speech route and plays it.
 /// One press starts the clip, a second press cuts it short.
 /// </summary>
-public sealed partial class SpeakViewModel : Observable
+public sealed partial class SpeakViewModel : Observable, IDisposable
 {
     readonly ISpeechProvider provider;
     readonly AppSettings settings;
@@ -48,6 +48,9 @@ public sealed partial class SpeakViewModel : Observable
         // deleting, starring or clearing an entry changes which clips are allowed to stay
         history.Changed += Prune;
     }
+
+    // the history outlives a profile swap's view model; an undisposed subscription would leak it
+    public void Dispose() => history.Changed -= Prune;
 
     /// <summary>
     /// Favorites keep their audio at any age; besides them the newest <see cref="AppSettings.SoundCacheEntries"/>
@@ -105,9 +108,16 @@ public sealed partial class SpeakViewModel : Observable
             return (hit.Audio, hit.MimeType);
         exportCts?.Dispose();
         exportCts = new CancellationTokenSource();
-        var (audio, mimeType) = await RenderAsync(text, entry, key, exportCts.Token);
-        status("Audio ready to save");
-        return (audio, mimeType);
+        try
+        {
+            var (audio, mimeType) = await RenderAsync(text, entry, key, exportCts.Token);
+            status("Audio ready to save");
+            return (audio, mimeType);
+        }
+        catch (OperationCanceledException)
+        {
+            return null; // a cancel during export is a stopped export, not a stuck "Rendering speech…"
+        }
     }
 
     /// <summary>Renders the clip, bills it to <paramref name="entry"/> and stores it when the cache is

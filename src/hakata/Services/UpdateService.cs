@@ -1,6 +1,9 @@
 using System;
+using System.IO;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Hakata.Services;
@@ -37,7 +40,9 @@ internal sealed class UpdateService : IUpdateService
         // this request instead of becoming a default header every other call would inherit
         using var request = new HttpRequestMessage(HttpMethod.Get, metadata.APILink);
         request.Headers.UserAgent.ParseAdd(metadata.Title);
-        using var response = await http.SendAsync(request).ConfigureAwait(false);
+        // the feed is tiny: bound the wait and cap the body, a hung or huge feed must not hang the check
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var response = await http.SendAsync(request, cts.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
@@ -46,9 +51,16 @@ internal sealed class UpdateService : IUpdateService
                 response.StatusCode);
         }
 
-        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        var tag = doc.RootElement.GetProperty("tag_name").GetString()?.Trim() ?? "";
+        var json = await ProviderHttp.ReadTextCappedAsync(response.Content, 256_000, cts.Token).ConfigureAwait(false);
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch (JsonException) { return null; } // a non-JSON feed claims no update instead of failing the check
+        using (doc)
+        {
+        // a non-release JSON (no tag_name) claims no update instead of throwing KeyNotFoundException
+        if (!doc.RootElement.TryGetProperty("tag_name", out var tagEl) || tagEl.ValueKind != JsonValueKind.String)
+            return null;
+        var tag = tagEl.GetString()?.Trim() ?? "";
         var version = TagVersion(tag);
         // an unreadable tag claims no update instead of failing the whole check
         if (version is null || metadata.Version >= version) return null;
@@ -56,6 +68,7 @@ internal sealed class UpdateService : IUpdateService
         var notes = doc.RootElement.TryGetProperty("body", out var body) ? body.GetString() ?? "" : "";
         var url = doc.RootElement.TryGetProperty("html_url", out var html) ? html.GetString() ?? "" : "";
         return new UpdateResponse(tag.TrimStart('v', 'V'), url, notes);
+        }
     }
 
     /// <summary>"v1.2.3" or "1.2.3-rc1": only the leading numbers compare, a suffix never throws.</summary>

@@ -1,4 +1,5 @@
 using System;
+using System.Net.Http;
 
 namespace Hakata.Services;
 
@@ -26,7 +27,7 @@ public static class ProviderUrls
         // root-level full endpoint (http://host:8080/chat/completions) would otherwise lose
         // its only path segment in CompatBase and get the /v1 prefix re-inserted.
         var t = baseUrl.TrimEnd('/');
-        if (t.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) return t;
+        if (t.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) return RequireAbsolute(t);
         return CompatUrl(baseUrl, "/chat/completions");
     }
 
@@ -36,11 +37,18 @@ public static class ProviderUrls
     /// already ending in /v1 is taken as-is, a bare host gets the OpenAI-style /v1 prefix.</summary>
     public static string CompatUrl(string baseUrl, string suffix)
     {
-        var b = CompatBase(StripQuery(baseUrl));
+        var b = RequireAbsolute(CompatBase(StripQuery(baseUrl)));
         return IsPathedBase(b) || b.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
             ? b + suffix
             : b + "/v1" + suffix;
     }
+
+    // an empty or relative base would build a relative request URI, which only throws at SendAsync
+    // as InvalidOperationException — past every HttpRequestException handler; fail here instead
+    static string RequireAbsolute(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out _)
+            ? url
+            : throw new HttpRequestException($"The provider base URL '{url}' is not an absolute URL");
 
     // A pasted base URL may carry a query (?token=...) or a fragment: appending a suffix after it
     // would land the suffix inside the query, so every request would 404 and the pasted token

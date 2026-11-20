@@ -157,6 +157,33 @@ public static partial class SelfTest
         Check(ProviderUrls.ModelsUrl("http://localhost:11434") == "http://localhost:11434/v1/models", "models url: bare base");
         Check(ProviderUrls.Endpoint("https://gw/v1?token=abc#f") == "https://gw/v1/chat/completions",
             "endpoint: a query and fragment on the base are dropped, the suffix lands on the path");
+        var emptyBase = false;
+        try { _ = ProviderUrls.Endpoint(""); } catch (HttpRequestException) { emptyBase = true; }
+        Check(emptyBase, "endpoint: an empty base URL fails as HttpRequestException, not a late InvalidOperationException");
+        var blankBase = false;
+        try { _ = ProviderUrls.ModelsUrl("   "); } catch (HttpRequestException) { blankBase = true; }
+        Check(blankBase, "endpoint: a blank base URL fails the same way on the models route");
+
+        var intTier = false;
+        try { _ = JsonSerializer.Deserialize<AppSettings>("{\"Tier\":99}", AppJson.Options); } catch (JsonException) { intTier = true; }
+        Check(intTier, "settings: a raw int enum value is rejected instead of loading as undefined");
+        var clamped = new AppSettings { Tier = (QualityTier)99, SidebarWidth = 99999, WindowWidth = -5, WindowHeight = 0 };
+        SettingsService.Normalize(clamped);
+        Check(clamped.Tier == QualityTier.Standard && clamped.SidebarWidth == AppSettings.MaxSidebarWidth
+              && clamped.WindowWidth == 1040 && clamped.WindowHeight == 700,
+            "settings: Normalize clamps an undefined tier and out-of-range geometry");
+
+        Check(Pricing.Cost(new TokenUsage(1_000_000, 500_000, Estimated: false, ReportedCost: 0), 10, 20) == 0,
+            "pricing: a reported cost of 0 means the run was free, not billed via token*price");
+        Check(Pricing.Cost(new TokenUsage(1_000_000, 500_000, Estimated: false), 10, 20) == 20,
+            "pricing: no reported cost still falls back to token*price");
+
+        Check(Jsons.TryParse("{\"a\":1}") is not null, "json slice: a matching closer parses");
+        Check(Jsons.TryParse("{\"a\":1]") is null, "json slice: a closer that does not match the opener is rejected");
+        Check(Jsons.TryParse("[1,2] trailing") is not null, "json slice: array opener still closes on ]");
+        var dupes = new System.Collections.ObjectModel.ObservableCollection<string> { "x" };
+        CollectionSync.InPlace(dupes, new List<string> { "x", "x" });
+        Check(dupes.Count == 2, "sync: value-equal duplicates are kept, not dropped");
         Check(ProviderUrls.Endpoint("http://h:8080/chat/completions") == "http://h:8080/chat/completions",
             "endpoint: a root-level full endpoint is returned unchanged, no /v1 re-inserted");
         Check(ProviderUrls.ModelsUrl("https://x?api_key=1") == "https://x/v1/models",

@@ -281,7 +281,7 @@ public sealed record TokenUsage(int PromptTokens, int CompletionTokens, bool Est
         var tokens = $"↑{PromptTokens} ↓{CompletionTokens} tokens";
         if (Estimated) tokens += " (approx.)";
         var cost = Pricing.Cost(this, inputPricePerMTok, outputPricePerMTok);
-        return cost is null ? tokens : tokens + " · " + Pricing.CostLabel(cost.Value);
+        return cost is > 0 ? tokens + " · " + Pricing.CostLabel(cost.Value) : tokens;
     }
 }
 
@@ -294,7 +294,8 @@ public static class Pricing
 
     public static double? Cost(TokenUsage usage, double inputPricePerMTok, double outputPricePerMTok)
     {
-        if (usage.ReportedCost is { } reported && reported > 0) return reported;
+        // a reported 0 means the run was free — distinct from null (not reported), which falls through to token×price
+        if (usage.ReportedCost is { } reported) return reported;
         if (inputPricePerMTok <= 0 && outputPricePerMTok <= 0) return null;
         return usage.PromptTokens / 1_000_000d * inputPricePerMTok +
                usage.CompletionTokens / 1_000_000d * outputPricePerMTok;

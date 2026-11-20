@@ -62,6 +62,13 @@ public sealed class InstanceGuard : IDisposable
     public static bool IsHeld(string dir)
     {
         dir = Profiles.CanonicalDir(dir);
+        // one probe can answer "held" transiently while another instance is mid-acquire (kernel
+        // object or lock file not settled yet); confirm with a second probe before trusting it
+        return ProbeHeld(dir) && ProbeHeld(dir);
+    }
+
+    static bool ProbeHeld(string dir)
+    {
         if (OperatingSystem.IsWindows())
         {
             try { using var m = Mutex.OpenExisting(Program.MutexNameFor(dir)); return true; }

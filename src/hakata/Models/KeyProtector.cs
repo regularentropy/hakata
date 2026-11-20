@@ -25,6 +25,8 @@ public static class KeyProtector
 
     public static string Protect(string key)
     {
+        // shortcut: off Windows the key is stored plaintext (the 0600 settings.json is the protection);
+        // no keyring is used — upgrade to libsecret/keyring when a shared-machine threat model needs it
         if (key.Length == 0 || !OperatingSystem.IsWindows()) return key;
         return Marker + Convert.ToBase64String(ProtectedData.Protect(
             Encoding.UTF8.GetBytes(key), Entropy, DataProtectionScope.CurrentUser));

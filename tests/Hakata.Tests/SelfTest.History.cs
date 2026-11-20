@@ -48,6 +48,25 @@ public static partial class SelfTest
 
         Check(vm.HasSpend && vm.SpendLabel == "~$0.2500 spent", "sidebar: shows the running spend of the stored entries");
 
+        // clear and delete must drop the selection too, or CanAct stays true on ghost rows
+        using (var h2 = new History(Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"))))
+        {
+            h2.Add(new HistoryEntry { From = "en", To = "de", Source = "a", Output = "b" });
+            h2.Add(new HistoryEntry { From = "en", To = "de", Source = "c", Output = "d" });
+            var vm2 = new HistoryViewModel(h2, _ => { }, _ => { });
+            vm2.SetSelection(vm2.Entries.ToList());
+            Check(vm2.CanAct, "sidebar: a selection makes the actions available");
+            vm2.DeleteSelectedCommand.Execute(null);
+            Check(vm2.Selection.Count == 0 && !vm2.CanAct, "sidebar: delete drops the selection and CanAct follows");
+            h2.Add(new HistoryEntry { From = "en", To = "de", Source = "e", Output = "f" });
+            vm2.Refresh();
+            vm2.SetSelection(vm2.Entries.ToList());
+            vm2.ClearCommand.Execute(null); // arms
+            vm2.ClearCommand.Execute(null); // clears
+            Check(vm2.Selection.Count == 0 && !vm2.CanAct && h2.Entries.Count == 0,
+                "sidebar: clear drops the selection and CanAct follows");
+        }
+
         var entry = vm.Entries[0];
         vm.ToggleFavoriteForCommand.Execute(entry);
         Check(entry.Favorite && vm.Entries[0].Favorite, "sidebar: row star toggles the entry");

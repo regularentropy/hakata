@@ -164,6 +164,7 @@ public sealed partial class HistoryViewModel : Observable
 
         history.Clear();
         Current = null;
+        SetSelection([]); // ghost rows must not stay actionable after the clear
         Refresh();
         report("History cleared");
     }
@@ -292,7 +293,7 @@ public sealed partial class HistoryViewModel : Observable
         if (current is not null && entries.Contains(current)) Current = null;
         history.Save();
         SelectedEntry = null;
-        Selection = [];
+        SetSelection([]); // notify: CanAct must not stay true on the deleted rows
         Refresh();
         report(entries.Count == 1 ? "Deleted from history" : $"Deleted {entries.Count} entries from history");
     }

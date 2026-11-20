@@ -69,6 +69,12 @@ public sealed class SettingsService(AppSettings settings)
         }
         // a preset deleted since the last save leaves a dangling id here: clear it
         settings.Options.Preset = settings.Options.ActivePreset?.Id ?? "";
+        // hand-edited json must not carry an undefined tier or absurd geometry into the run
+        if (!Enum.IsDefined(settings.Tier)) settings.Tier = QualityTier.Standard;
+        if (!double.IsFinite(settings.SidebarWidth)) settings.SidebarWidth = AppSettings.DefaultSidebarWidth;
+        settings.SidebarWidth = Math.Clamp(settings.SidebarWidth, AppSettings.MinSidebarWidth, AppSettings.MaxSidebarWidth);
+        if (!double.IsFinite(settings.WindowWidth) || settings.WindowWidth <= 0) settings.WindowWidth = 1040;
+        if (!double.IsFinite(settings.WindowHeight) || settings.WindowHeight <= 0) settings.WindowHeight = 700;
     }
 
     /// <summary>A first start seeds four deletable presets so the picker is not empty; they are ordinary

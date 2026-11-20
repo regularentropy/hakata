@@ -111,10 +111,23 @@ internal static class HistoryCrypto
         var key = RandomNumberGenerator.GetBytes(32);
         Directory.CreateDirectory(dir);
         var path = KeyPath(dir, fileName);
-        // write with the 0600 mode on the handle before the first byte lands — a plain
-        // WriteAllBytes would expose the raw DEK in a 0644 window until the RestrictFile below
-        StoreFile.WriteRestrictedBytes(path, MachineKeyFileBytes(key));
-        return key;
+        // check-then-create races across processes: write a unique temp and rename WITHOUT overwrite,
+        // so two racing creators cannot both win — the loser's rename throws and it adopts the winner's
+        // key by re-reading, instead of holding a DEK the store is not encrypted with
+        var tmp = path + "." + Guid.NewGuid().ToString("n") + ".tmp";
+        try
+        {
+            // 0600 on the handle before the first byte lands — a plain WriteAllBytes would expose the raw DEK in a 0644 window
+            StoreFile.WriteRestrictedBytes(tmp, MachineKeyFileBytes(key));
+            File.Move(tmp, path, overwrite: false);
+            StoreFile.RestrictFile(path);
+            return key;
+        }
+        catch (IOException)
+        {
+            StoreFile.DeleteQuietly(tmp);
+            return ReadKey(dir, fileName) is { Kind: KeyKind.Machine, Dek: { } winner } ? winner : null;
+        }
     }
 
     // envelope wrap: the password never touches the database, it wraps the 32-byte data key, so setting
