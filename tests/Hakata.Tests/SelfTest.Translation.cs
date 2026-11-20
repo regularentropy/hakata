@@ -836,6 +836,12 @@ public static partial class SelfTest
             vm.InputText = "こんにちは";
             await vm.TranslateAsync();
             var entry = vm.History.Current;
+            Check(!vm.IsStale, "stale: a finished run is fresh");
+            vm.InputText = "こんにちは!";
+            Check(vm.IsStale && !vm.ExtrasEnabled, "stale: adding a letter marks the output stale");
+            vm.InputText = "こんにちは";
+            Check(!vm.IsStale && vm.ExtrasEnabled && vm.StatusDisplay.Contains("Done"),
+                "stale: deleting the letter back to the translated source clears the flag");
             // detect 10/2 (0.00006) rides the entry that also carries the run's 1000/500 (0.0105)
             Check(entry is not null && Math.Abs(entry.Cost - 0.01056) < 0.000001,
                 $"extras: the detect cost rides the new entry ({entry?.Cost})");

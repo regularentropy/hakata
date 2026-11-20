@@ -24,6 +24,8 @@ public sealed partial class TranslateViewModel : Observable
     int shown;
     /// <summary>Why the shown result is stale: the source was edited, or a preset changed the options.</summary>
     string staleReason = "Source edited";
+    /// <summary>The trimmed source the shown output was produced from; editing back to it clears the stale flag.</summary>
+    string shownSource = "";
 
     AppSettings settings => settingsService.Settings;
 
@@ -222,9 +224,10 @@ public sealed partial class TranslateViewModel : Observable
         OnPropertyChanged(nameof(IsLongInput));
         LanguageHint = ""; // the previous run's hint no longer describes this text
         if (Detected.Length > 0) Detected = "";
-        // an edit leaves the shown result stale until the next run replaces it
+        // an edit leaves the shown result stale until the next run replaces it — unless the edit
+        // returns the input to the text the shown output was produced from
         staleReason = "Source edited";
-        IsStale = OutputText.Trim().Length > 0;
+        IsStale = OutputText.Trim().Length > 0 && (value?.Trim() ?? "") != shownSource;
         OnPropertyChanged(nameof(StatusDisplay)); // the reason may have changed while IsStale did not
     }
 
@@ -314,7 +317,8 @@ public sealed partial class TranslateViewModel : Observable
         // the romanisation was paid for once: restoring the entry brings it back with the text
         TranslitSource = entry.TranslitSource;
         TranslitTarget = entry.TranslitTarget;
-        IsStale = false; // the restored output matches the restored source
+        shownSource = entry.Source.Trim(); // the restored output matches the restored source
+        IsStale = false;
         Status = "Restored from history";
     }
 
@@ -356,6 +360,7 @@ public sealed partial class TranslateViewModel : Observable
         OutputText = "";
         ResetResult();
         IsStale = false;
+        shownSource = text; // the run's source: edits away from it go stale, edits back clear it
         // the run's own partial text: the pane may have changed hands while streaming
         var streamed = "";
         try
@@ -564,6 +569,7 @@ public sealed partial class TranslateViewModel : Observable
         InputText = "";
         OutputText = "";
         ResetResult();
+        shownSource = "";
         IsStale = false;
     }
 
