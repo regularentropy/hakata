@@ -1,24 +1,25 @@
 # Hakata
+[![Build](https://github.com/regularentropy/hakata/actions/workflows/build-self-contained.yml/badge.svg)](https://github.com/regularentropy/hakata/actions/workflows/build-self-contained.yml)
+[![Release](https://img.shields.io/github/v/release/regularentropy/hakata)](https://github.com/regularentropy/hakata/releases)
+[![.NET](https://img.shields.io/badge/.NET-10-blue.svg)]()
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 **A desktop text translator that runs on your own provider - any OpenAI-compatible API, your key, your bill.**
 
 ![Hakata, dark theme](docs/screenshot-dark.png)
 
-Your text on the left, the translation on the right. No account, no subscription and no middleman: bring the key you already have for whichever model you prefer, hosted or on your own machine, and the app talks to that provider only.
-
 ## Features
 
-Everything a translator needs, plus the parts most of them leave out.
-
-- **385 languages** - searchable pickers, *Detect Language* as the source, a swap button, most used first.
-- **Model routing and options** - a model and reasoning effort per tier, plus formality, style, gender and context.
-- **Several providers side by side** - every slot picks `provider · model`, so a cheap model can sit next to an expensive one.
-- **Alternatives and word insights** - other ways to say it, as many as you set, each with a reason, plus nuance variants for the words you are unsure about.
-- **Presets** - name a wording setup and recall it with Ctrl+1…9.
-- **History** - every translation, searchable and filterable, with starring and deletion for several rows at once.
-- **Know the cost** - tokens in and out, a price field and a running total; published prices fill themselves in.
-- **Voice input and read-aloud** - dictate instead of typing, or have the finished text read back to you.
-- **Transliteration** - a Latin-letter line under Cyrillic, Arabic, CJK, Korean and other non-Latin scripts.
+- **385 languages** - searchable pickers, *Detect Language* as the source, a swap button.
+- **Model routing** - a model and reasoning effort per tier, plus formality, style and context options.
+- **Multiple providers** - every slot picks its own `provider · model`, cheap next to expensive.
+- **Alternatives** - other phrasings, each with a reason, plus nuance variants for unsure words.
+- **Presets** - name a wording setup and recall it with <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd>.
+- **History** - every translation, searchable and filterable, with starring and bulk delete.
+- **Cost tracking** - tokens in and out, a price per model and a running total.
+- **Voice** - dictate instead of typing, or have the finished text read back to you.
+- **Transliteration** - a Latin-letter line under Cyrillic, Arabic, CJK and other non-Latin scripts.
+- **Profiles** - separate data folders with history, settings and keys, switchable without restart.
 
 ## Requirements
 
@@ -50,15 +51,11 @@ Anything that speaks `/chat/completions` works. These two are the ones Hakata is
 | Opper | `https://api.opper.ai/v3/compat` | `melious/glm-5.3-flash`, `melious/deepseek-v4.1-flash` |
 | OpenRouter | `https://openrouter.ai/api/v1` | `google/gemini-3.8-flash` |
 
-Each provider takes a name, URL, key and default model. An empty slot falls back to the first provider, and the grey hint in the field names the one it will use.
-
 ## Quick start
 
 1. Open **Settings** with <kbd>Ctrl</kbd>+<kbd>,</kbd> and fill in a base URL, an API key and a model - or point it at a local server and leave the key empty.
 2. Choose the language pair, or leave the source on *Detect Language*.
 3. Type, paste or drop a text and press **Translate**.
-
-That is the whole setup. Everything else, from tiers to prices, is optional.
 
 ## Your data stays yours
 
