@@ -174,6 +174,7 @@ public static partial class SelfTest
         await WithTimeout(Task.Run(SecurityCredentialedHostGuard), "security credentialed host guard");
         await WithTimeout(SecuritySpeechOverrideUrls(), "security speech override urls");
         await WithTimeout(SecurityRenderedImageResources(), "security rendered image resources");
+        await WithTimeout(Task.Run(SecurityRenderedMarkdownBounds), "security rendered markdown bounds");
 
         Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
         return failures == 0 ? 0 : 1;

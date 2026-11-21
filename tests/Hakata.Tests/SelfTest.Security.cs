@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -318,5 +319,108 @@ public static partial class SelfTest
         try { await ProviderHttp.ReadBytesCappedAsync(new StreamContent(pastCap), 16, CancellationToken.None); }
         catch (HttpRequestException) { capThrew = true; }
         Check(capThrew, "a body past the cap is refused");
+    }
+
+    /// <summary>Release-notes markdown is parsed by a recursive engine, so the text handed to it
+    /// is work-bounded first (TextRules.BoundRenderedMarkdown, applied at the release-notes
+    /// property every render path reads): the total length is capped and every line's leading
+    /// blockquote/list marker run is collapsed to a small depth, so content-shaped input cannot
+    /// exhaust the parser stack or burn quadratic parse time. Ordinary notes pass through
+    /// unchanged. The engine round-trips below only ever see sanitized text.</summary>
+    static void SecurityRenderedMarkdownBounds()
+    {
+        // ordinary notes pass through byte-identical
+        var notes = "## What's new\n- a fix\n- a feature\n\n> a quoted line\n>> a nested quote\n\n1. first\n2. second\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\ncode fence\n```";
+        Check(TextRules.BoundRenderedMarkdown(notes) == notes, "ordinary release notes pass through unchanged");
+        Check(TextRules.BoundRenderedMarkdown("  ## What's new\n- a fix  ".Trim()) == "## What's new\n- a fix",
+            "the trimmed notes shape passes through unchanged");
+        Check(TextRules.BoundRenderedMarkdown("") == "", "empty notes pass through unchanged");
+
+        // hostile marker runs: blockquote, list, ordered list, mixed, CRLF-separated
+        string[] deep =
+        {
+            string.Concat(Enumerable.Repeat("> ", 30_000)) + "x",
+            string.Concat(Enumerable.Repeat("> ", 10_000)) + "x",
+            string.Concat(Enumerable.Repeat(">", 60_000)) + "x",
+            string.Concat(Enumerable.Repeat("- ", 30_000)) + "x",
+            string.Concat(Enumerable.Repeat("* ", 30_000)) + "x",
+            string.Concat(Enumerable.Repeat("1. ", 20_000)) + "x",
+            string.Concat(Enumerable.Repeat("> - ", 10_000)) + "x",
+            string.Concat(Enumerable.Repeat("- > ", 10_000)) + "x",
+            string.Concat(Enumerable.Repeat("> > > x\r\n", 10_000)) + "x",
+        };
+        foreach (var d in deep)
+        {
+            var b = TextRules.BoundRenderedMarkdown(d);
+            Check(LeadingMarkers(b) <= TextRules.MaxMarkdownNesting,
+                $"a {d.Length}-char marker run collapses to depth <= {TextRules.MaxMarkdownNesting} (got {LeadingMarkers(b)})");
+        }
+        // depth boundary: exactly at the cap is kept, one past it collapses
+        var atCap = string.Concat(Enumerable.Repeat("> ", TextRules.MaxMarkdownNesting)) + "x";
+        Check(TextRules.BoundRenderedMarkdown(atCap) == atCap, "a marker run exactly at the depth cap is kept");
+        var pastCap = string.Concat(Enumerable.Repeat("> ", TextRules.MaxMarkdownNesting + 1)) + "x";
+        Check(LeadingMarkers(TextRules.BoundRenderedMarkdown(pastCap)) == TextRules.MaxMarkdownNesting,
+            "a marker run one past the depth cap collapses to the cap");
+
+        // length cap: exactly at the cap is kept, one past it truncates
+        var atLen = new string('a', TextRules.MaxRenderedMarkdownChars);
+        Check(TextRules.BoundRenderedMarkdown(atLen).Length == TextRules.MaxRenderedMarkdownChars,
+            "notes exactly at the length cap are kept");
+        var pastLen = new string('a', TextRules.MaxRenderedMarkdownChars + 1);
+        Check(TextRules.BoundRenderedMarkdown(pastLen).Length == TextRules.MaxRenderedMarkdownChars,
+            "notes past the length cap are truncated to it");
+
+        // engine round-trip on SANITIZED hostile input through the app's engine factory:
+        // every transform must complete quickly (the unsanitized shapes abort the process,
+        // so they are never fed to the engine here)
+        var engine = MarkdownEngines.CreateGuarded();
+        foreach (var d in deep)
+        {
+            var b = TextRules.BoundRenderedMarkdown(d);
+            var sw = Stopwatch.StartNew();
+            var ctrl = engine.Transform(b);
+            sw.Stop();
+            Check(ctrl is not null && sw.ElapsedMilliseconds < 5_000,
+                $"sanitized {d.Length}-char marker run renders via the app engine in {sw.ElapsedMilliseconds} ms");
+        }
+        // benign 60 KB notes: unchanged by the sanitizer and fast through the engine
+        var benign = string.Concat(Enumerable.Repeat("lorem ipsum dolor sit amet ", 2222)) + new string('a', 7);
+        Check(benign.Length == 60_001 && TextRules.BoundRenderedMarkdown(benign) == benign,
+            "a benign 60 001-char line passes through unchanged");
+        var sw2 = Stopwatch.StartNew();
+        var ctrl2 = engine.Transform(TextRules.BoundRenderedMarkdown(benign));
+        sw2.Stop();
+        Check(ctrl2 is not null && sw2.ElapsedMilliseconds < 5_000,
+            $"benign 60 KB notes render via the app engine in {sw2.ElapsedMilliseconds} ms");
+
+        // the release-notes property (what the update window binds to) applies the bound
+        var vm = new UpdateViewModel(new UpdateResponse("1.3.0", "https://example.invalid/x", deep[0]), new AppMetadata());
+        Check(LeadingMarkers(vm.ReleaseNotes) <= TextRules.MaxMarkdownNesting,
+            "the release-notes property hands the engine depth-bounded text");
+        var bigVm = new UpdateViewModel(
+            new UpdateResponse("1.3.0", "https://example.invalid/x", new string('a', 300_000)), new AppMetadata());
+        Check(bigVm.ReleaseNotes.Length == TextRules.MaxRenderedMarkdownChars,
+            "the release-notes property truncates oversize notes to the length cap");
+    }
+
+    /// <summary>Leading blockquote/list marker count of a line, mirroring the bound's scan.</summary>
+    static int LeadingMarkers(string s)
+    {
+        var i = 0; var n = 0;
+        while (i < s.Length)
+        {
+            var c = s[i];
+            if (c is ' ' or '\t') { i++; continue; }
+            if (c == '>') { n++; i++; continue; }
+            if (c is '-' or '*' or '+' && i + 1 < s.Length && s[i + 1] == ' ') { n++; i++; continue; }
+            if (char.IsDigit(c))
+            {
+                var j = i;
+                while (j < s.Length && char.IsDigit(s[j])) j++;
+                if (j + 1 < s.Length && s[j] == '.' && s[j + 1] == ' ') { n++; i = j + 1; continue; }
+            }
+            break;
+        }
+        return n;
     }
 }

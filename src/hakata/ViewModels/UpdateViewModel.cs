@@ -26,9 +26,11 @@ internal sealed partial class UpdateViewModel : Observable
     public string NewVersion => $"v{resp.Tag}";
     public string CurrentVersion => $"v{metadata.Version}";
     public string VersionSummary => $"You are running {CurrentVersion}.";
+    // the notes are feed-controlled markdown rendered by a recursive parser: bound the parse
+    // work (total length and per-line nesting depth) before the text can reach the engine
     public string ReleaseNotes => string.IsNullOrWhiteSpace(resp.ReleaseNotes)
         ? "No release notes were provided."
-        : resp.ReleaseNotes.Trim();
+        : TextRules.BoundRenderedMarkdown(resp.ReleaseNotes.Trim());
 
     public bool HasStatus => Status.Length > 0;
 

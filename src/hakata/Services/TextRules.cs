@@ -49,4 +49,92 @@ public static class TextRules
                 return true;
         return false;
     }
+
+    /// <summary>Upper bound for markdown handed to the renderer: long enough for real release
+    /// notes, short enough that worst-case parse work stays small even for hostile input.</summary>
+    internal const int MaxRenderedMarkdownChars = 64_000;
+
+    /// <summary>Deepest blockquote/list nesting kept on one line. The markdown engine's parser
+    /// recurses per nesting level, so a longer run of leading markers on one line could exhaust
+    /// the process stack (an uncatchable abort); runs past this are collapsed before rendering.</summary>
+    internal const int MaxMarkdownNesting = 16;
+
+    /// <summary>
+    /// Bounds the parse work rendered markdown can drive the engine into: the total length is
+    /// capped at <see cref="MaxRenderedMarkdownChars"/>, and on every line a leading run of
+    /// blockquote (<c>&gt;</c>) or list (<c>-</c>/<c>*</c>/<c>+</c>/<c>1.</c>) markers deeper than
+    /// <see cref="MaxMarkdownNesting"/> is collapsed to that depth, so content can no longer make
+    /// the recursive parser run unbounded. Ordinary notes pass through unchanged.
+    /// </summary>
+    internal static string BoundRenderedMarkdown(string text)
+    {
+        var src = text.Length > MaxRenderedMarkdownChars ? text[..MaxRenderedMarkdownChars] : text;
+        StringBuilder? sb = null;
+        var pos = 0;
+        while (pos < src.Length)
+        {
+            var nl = src.IndexOf('\n', pos);
+            var lineEnd = nl < 0 ? src.Length : nl;
+            var (count, contentStart) = ScanMarkerPrefix(src, pos, lineEnd);
+            if (count > MaxMarkdownNesting)
+            {
+                if (sb is null) { sb = new StringBuilder(src.Length); sb.Append(src, 0, pos); }
+                var keepEnd = MarkerEnd(src, pos, lineEnd, MaxMarkdownNesting);
+                sb.Append(src, pos, keepEnd - pos);
+                sb.Append(src, contentStart, lineEnd - contentStart);
+            }
+            else sb?.Append(src, pos, lineEnd - pos);
+            if (nl < 0) break;
+            sb?.Append('\n');
+            pos = nl + 1;
+        }
+        return sb?.ToString() ?? src;
+    }
+
+    /// <summary>Counts the leading run of blockquote/list markers on [start,end) and returns where
+    /// the line's real content begins (the first character after that marker prefix).</summary>
+    static (int count, int contentStart) ScanMarkerPrefix(string s, int start, int end)
+    {
+        var i = start; var count = 0;
+        while (i < end)
+        {
+            var c = s[i];
+            if (c is ' ' or '\t') { i++; continue; }
+            if (c == '>') { count++; i++; continue; }
+            if (IsListMarker(s, i, end)) { count++; i++; continue; }
+            if (char.IsDigit(c))
+            {
+                var j = i;
+                while (j < end && char.IsDigit(s[j])) j++;
+                if (j + 1 < end && s[j] == '.' && s[j + 1] is ' ' or '\t') { count++; i = j + 1; continue; }
+            }
+            break;
+        }
+        return (count, i);
+    }
+
+    /// <summary>Offset just past the <paramref name="maxMarkers"/>-th leading marker of the line,
+    /// used to keep only the first markers of an over-deep prefix.</summary>
+    static int MarkerEnd(string s, int start, int end, int maxMarkers)
+    {
+        var i = start; var count = 0;
+        while (i < end && count < maxMarkers)
+        {
+            var c = s[i];
+            if (c is ' ' or '\t') { i++; continue; }
+            if (c == '>') { count++; i++; continue; }
+            if (IsListMarker(s, i, end)) { count++; i++; continue; }
+            if (char.IsDigit(c))
+            {
+                var j = i;
+                while (j < end && char.IsDigit(s[j])) j++;
+                if (j + 1 < end && s[j] == '.' && s[j + 1] is ' ' or '\t') { count++; i = j + 1; continue; }
+            }
+            break;
+        }
+        return i;
+    }
+
+    static bool IsListMarker(string s, int i, int end) =>
+        s[i] is '-' or '*' or '+' && i + 1 < end && s[i + 1] is ' ' or '\t';
 }
