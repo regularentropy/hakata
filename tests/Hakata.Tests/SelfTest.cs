@@ -130,6 +130,7 @@ public static partial class SelfTest
         await WithTimeout(HistoryRoundTrip, "history round trip");
         await WithTimeout(HistoryEncryption, "history encryption");
         await WithTimeout(HistoryStoreSizeCaps, "history store size caps");
+        await WithTimeout(SaveSnapshotReadCap, "save snapshot read cap");
         await WithTimeout(SoundCacheEncryption, "sound cache encryption");
         await WithTimeout(HistoryPasswordProtection, "history password protection");
         await WithTimeout(HistoryUnlockWorkFactor, "history unlock work factor");
@@ -168,6 +169,7 @@ public static partial class SelfTest
         await WithTimeout(SpeakCancelDropsInFlightRender(), "speak cancel drops in-flight render");
         await WithTimeout(ProfilesCases, "profiles");
         await WithTimeout(ProfilesVmCases, "profiles vm");
+        await WithTimeout(PointerReadCaps, "profile pointer read caps");
         await WithTimeout(InstanceGuardCases, "instance guard");
         await WithTimeout(Task.Run(SecurityLinks), "security links");
         await WithTimeout(Task.Run(SecuritySpeechWavGuard), "security speech wav guard");

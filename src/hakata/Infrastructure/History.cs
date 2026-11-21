@@ -340,7 +340,10 @@ public sealed class History : IDisposable
                 vacuum.ExecuteNonQuery();
             }
             StoreFile.RestrictFile(tmpPlain);
-            var enc = HistoryCrypto.Encrypt(key, File.ReadAllBytes(tmpPlain));
+            // capped on the open handle: a same-user writer can swap the temp between the VACUUM
+            // write and this read, and the buffer must never be sized by the swapped length — an
+            // over-cap temp aborts the save (previous history.db kept, temps cleaned in finally)
+            var enc = HistoryCrypto.Encrypt(key, StoreFile.ReadAllBytesCapped(tmpPlain, StoreFile.MaxStoreBytes));
             StoreFile.WriteRestrictedBytes(tmpEnc, enc);
             // flush the ciphertext to disk before the rename: a power loss between write and
             // flush could otherwise leave a zero-length history.db and lose the whole history

@@ -832,5 +832,64 @@ public static partial class SelfTest
 
     }
 
+    /// <summary>The save's temp-snapshot read-back is capped on the open handle: a snapshot over
+    /// the store cap aborts the save safely (previous history.db kept byte-identical, temps
+    /// cleaned, failure reported) instead of sizing buffers from the temp file, and a normal
+    /// save/load round-trip is unchanged.</summary>
+    static void SaveSnapshotReadCap()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            // helper boundaries at the store cap (sparse files: the over-cap one is refused at
+            // open and never read, the at-cap one still reads)
+            var overCap = Path.Combine(dir, "over.tmp");
+            using (var fs = File.Create(overCap)) fs.SetLength(StoreFile.MaxStoreBytes + 1);
+            try { StoreFile.ReadAllBytesCapped(overCap, StoreFile.MaxStoreBytes); Check(false, "save temp cap: a temp over the store cap is refused before reading"); }
+            catch (InvalidDataException) { Check(true, "save temp cap: a temp over the store cap is refused before reading"); }
+            var atCap = Path.Combine(dir, "at.tmp");
+            using (var fs = File.Create(atCap)) fs.SetLength(StoreFile.MaxStoreBytes);
+            Check(StoreFile.ReadAllBytesCapped(atCap, StoreFile.MaxStoreBytes).Length == StoreFile.MaxStoreBytes,
+                "save temp cap: a temp exactly at the store cap still reads");
+
+            // a normal save writes the store and reloads (round trip unchanged)
+            var h = new History(dir);
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "hello", Output = "hallo" });
+            var dbPath = Path.Combine(dir, "history.db");
+            Check(h.SaveNotice is null && File.Exists(dbPath), "save temp cap: a normal save writes history.db with no notice");
+            var reloaded = new History(dir);
+            reloaded.Load();
+            Check(reloaded.Entries.Count == 1 && reloaded.Entries[0].Source == "hello" && reloaded.RecoveryNotice is null,
+                "save temp cap: a normal save reloads");
+            var before = File.ReadAllBytes(dbPath);
+
+            // 200 huge entries push the VACUUM temp past the store cap: the read-back is refused,
+            // the save aborts, and the previous store survives untouched
+            for (var i = 0; i < 200; i++)
+                h.Entries.Insert(0, new HistoryEntry { From = "en", To = "de", Source = "s", Output = new string('x', 350_000) });
+            h.Save();
+            Check(h.SaveNotice is { Length: > 0 } && h.SaveNotice.Contains("could not be saved"),
+                "save temp cap: an over-cap snapshot aborts the save with a notice");
+            Check(File.Exists(dbPath) && File.ReadAllBytes(dbPath).SequenceEqual(before),
+                "save temp cap: the previous history.db is kept byte-identical after an aborted save");
+            var tmpDir = Path.Combine(dir, ".tmp");
+            Check(!Directory.Exists(tmpDir) || Directory.GetFiles(tmpDir).Length == 0,
+                "save temp cap: an aborted save leaves no temp files behind");
+
+            // the store still saves and reloads afterwards
+            h.Entries.Clear();
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "after", Output = "danach" });
+            var again = new History(dir);
+            again.Load();
+            Check(again.Entries.Count == 1 && again.Entries[0].Source == "after" && again.RecoveryNotice is null,
+                "save temp cap: a small save after the aborted one persists and reloads");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
     // ---- end to end against a local mock endpoint ------------------------
 }

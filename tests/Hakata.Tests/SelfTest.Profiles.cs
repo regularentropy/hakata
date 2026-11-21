@@ -487,4 +487,69 @@ public static partial class SelfTest
             try { Directory.Delete(root, true); } catch (Exception) { }
         }
     }
+
+    /// <summary>The active-profile pointer is read capped on the open handle: a normal pointer
+    /// resolves the named profile, while an oversized, symlinked, non-UTF-8 or otherwise
+    /// unreadable pointer falls back to the default profile without being read whole.</summary>
+    static void PointerReadCaps()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var pointer = Path.Combine(baseDir, "active-profile");
+        try
+        {
+            Directory.CreateDirectory(baseDir);
+            Profiles.Create(baseDir, "A");
+            const int cap = Profiles.MaxPointerBytes;
+
+            // a normal pointer (with trailing newline) resolves the named profile
+            File.WriteAllText(pointer, "A\n");
+            Check(Profiles.ActiveName(baseDir) == "A" && Profiles.ResolveActiveDir(null, baseDir) == Profiles.DirOf(baseDir, "A"),
+                "profile pointer: a normal pointer resolves the named profile");
+
+            // exactly at the cap (name padded with spaces, trimmed on read) still reads and resolves
+            File.WriteAllText(pointer, "A" + new string(' ', cap - 1));
+            Check(new FileInfo(pointer).Length == cap && Profiles.ActiveName(baseDir) == "A",
+                "profile pointer: a pointer exactly at the cap still reads and resolves");
+
+            // one byte over the cap: refused before any buffer is sized, default fallback
+            File.WriteAllText(pointer, "A" + new string(' ', cap));
+            Check(new FileInfo(pointer).Length == cap + 1 && Profiles.ActiveName(baseDir) == Profiles.DefaultName
+                && Profiles.ResolveActiveDir(null, baseDir) == Profiles.DefaultDir(baseDir),
+                "profile pointer: a pointer over the cap falls back to the default without being read");
+            try { StoreFile.ReadAllTextCapped(pointer, cap); Check(false, "profile pointer: the capped helper refuses an over-cap pointer"); }
+            catch (InvalidDataException) { Check(true, "profile pointer: the capped helper refuses an over-cap pointer"); }
+
+            // a non-UTF-8 pointer within the cap reads as garbage and falls back like an unknown name
+            File.WriteAllBytes(pointer, [0xFF, 0xFE, 0x00, 0x41]);
+            Check(Profiles.ActiveName(baseDir) == Profiles.DefaultName,
+                "profile pointer: a non-UTF-8 pointer falls back to the default");
+
+            // a pointer naming a profile that does not exist falls back (unchanged behavior)
+            File.WriteAllText(pointer, "Z");
+            Check(Profiles.ActiveName(baseDir) == Profiles.DefaultName,
+                "profile pointer: a pointer naming a missing profile falls back to the default");
+
+            // a symlink to an oversized file is capped too: the open handle's length follows the link
+            if (!OperatingSystem.IsWindows())
+            {
+                var big = Path.Combine(baseDir, "big.bin");
+                using (var fs = File.Create(big)) fs.SetLength(8L * 1024 * 1024);
+                File.Delete(pointer);
+                File.CreateSymbolicLink(pointer, big);
+                Check(Profiles.ActiveName(baseDir) == Profiles.DefaultName
+                    && Profiles.ResolveActiveDir(null, baseDir) == Profiles.DefaultDir(baseDir),
+                    "profile pointer: a symlinked pointer to an oversized file falls back to the default");
+                File.Delete(pointer);
+            }
+
+            // a directory in place of the pointer is not a readable file: default fallback
+            Directory.CreateDirectory(pointer);
+            Check(Profiles.ActiveName(baseDir) == Profiles.DefaultName,
+                "profile pointer: a directory in place of the pointer falls back to the default");
+        }
+        finally
+        {
+            try { Directory.Delete(baseDir, true); } catch (Exception) { }
+        }
+    }
 }

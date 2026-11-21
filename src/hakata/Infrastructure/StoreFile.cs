@@ -74,25 +74,33 @@ internal static class StoreFile
     internal static byte[] ReadAllBytesCapped(string path, long max)
     {
         using var fs = OpenReadCapped(path, max);
-        var bytes = new byte[(int)fs.Length];
+        // one length capture: a file grown between the open-time check and the allocation (a local
+        // writer can swap the file inside that window) is refused here instead of sizing the buffer
+        var len = fs.Length;
+        if (len > max || len > int.MaxValue)
+            throw new InvalidDataException($"{Path.GetFileName(path)} is {len} bytes, over the {max}-byte cap");
+        var bytes = new byte[(int)len];
         fs.ReadExactly(bytes);
         return bytes;
     }
 
-    /// <summary>Reads a whole text store file, refusing an over-cap file before allocating (see <see cref="OpenReadCapped"/>).</summary>
+    /// <summary>Reads a whole text store file, refusing an over-cap file before allocating (see
+    /// <see cref="OpenReadCapped"/>). The capped bytes are decoded in memory, so a file grown after
+    /// the open-time check still cannot grow the decoded string past the cap.</summary>
     internal static string ReadAllTextCapped(string path, long max)
     {
-        using var fs = OpenReadCapped(path, max);
-        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var bytes = ReadAllBytesCapped(path, max);
+        using var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         return reader.ReadToEnd();
     }
 
-    /// <summary>Async twin of <see cref="ReadAllTextCapped"/> for a path.</summary>
+    /// <summary>Async twin of <see cref="ReadAllTextCapped"/> for a path; the cap is also enforced
+    /// while reading (see <see cref="ReadAllTextCappedAsync(Stream, long)"/>), so a file grown after
+    /// the open-time check cannot grow the result past the cap.</summary>
     internal static async Task<string> ReadAllTextCappedAsync(string path, long max)
     {
         using var fs = OpenReadCapped(path, max);
-        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return await reader.ReadToEndAsync();
+        return await ReadAllTextCappedAsync(fs, max);
     }
 
     /// <summary>

@@ -76,6 +76,10 @@ public static class Profiles
         return entries;
     }
 
+    /// <summary>Upper bound for the active-profile pointer: it holds one profile name (at most 32
+    /// chars), so a bigger file is not a pointer this app wrote and is never read whole.</summary>
+    internal const int MaxPointerBytes = 4096;
+
     /// <summary>The active profile name: the trimmed <c>active-profile</c> pointer when it names an
     /// existing profile, else the default.</summary>
     public static string ActiveName(string baseDir)
@@ -83,7 +87,9 @@ public static class Profiles
         try
         {
             var pointer = Path.Combine(baseDir, "active-profile");
-            var name = File.Exists(pointer) ? File.ReadAllText(pointer).Trim() : "";
+            // capped on the open handle: an oversized or swapped pointer is refused before any
+            // buffer is sized and resolves to the default, exactly like an unreadable one
+            var name = File.Exists(pointer) ? StoreFile.ReadAllTextCapped(pointer, MaxPointerBytes).Trim() : "";
             if (name.Length > 0 && List(baseDir).Any(e => NameEquals(e.Name, name))) return name;
         }
         catch (Exception) { /* an unreadable pointer resolves to the default */ }
