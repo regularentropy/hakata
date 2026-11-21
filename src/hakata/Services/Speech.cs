@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -172,12 +173,108 @@ public sealed class SpeechPlayer : ISpeechPlayer
     }
 
     /// <summary>Windows reads by file extension (mp3, wav, aiff); libsndfile reads by content, so the
-    /// temp file's extension only has to be plausible there.</summary>
+    /// temp file's extension only has to be plausible there. The header guard runs first on every OS,
+    /// so no native decoder ever parses a hostile WAV.</summary>
     internal static WaveStream OpenAudio(string path)
     {
+        ThrowIfHostileWav(path);
         if (OperatingSystem.IsWindows()) return new AudioFileReader(path);
         if (OperatingSystem.IsLinux()) return new SoundFileReader(path);
         throw new PlatformNotSupportedException("Audio playback needs Windows or Linux.");
+    }
+
+    /// <summary>Managed pre-check of a RIFF/WAVE header before any native decoder parses the file.
+    /// CVE-2026-37555 (GHSA-x46m-7mvp-6fvq): libsndfile's WAV IMA-ADPCM path computes
+    /// sf.frames = samplesperblock * blocks in a 32-bit int and overflows on a hostile header — a heap
+    /// overflow on builds without the open-time validate, an abort on 1.2.2-4. The product is recomputed
+    /// here in 64-bit and rejected before the native library sees the bytes.</summary>
+    internal static void ThrowIfHostileWav(string path)
+    {
+        using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var head = new byte[(int)Math.Min(f.Length, 64 * 1024L)];
+        int read = 0;
+        while (read < head.Length)
+        {
+            int n = f.Read(head, read, head.Length - read);
+            if (n <= 0) break;
+            read += n;
+        }
+        if (read < head.Length) Array.Resize(ref head, read);
+        ThrowIfHostileWav(head, f.Length);
+    }
+
+    /// <summary>Byte-level form of the guard. <paramref name="fileLen"/> is the real file size; it clamps
+    /// the declared data-chunk length exactly like libsndfile does, so both sides compute the same blocks.</summary>
+    internal static void ThrowIfHostileWav(byte[] wav, long fileLen)
+    {
+        if (wav.Length < 12) return; // too short to be a WAV; the native decoder rejects it on its own
+        var riff = Encoding.ASCII.GetString(wav, 0, 4);
+        if (riff is not ("RIFF" or "RIFX")) return; // not a WAV container; no WAV overflow math applies
+        if (Encoding.ASCII.GetString(wav, 8, 4) != "WAVE") return;
+        bool big = riff == "RIFX";
+        ushort U16(int o) => big ? BinaryPrimitives.ReadUInt16BigEndian(wav.AsSpan(o, 2))
+                                 : BinaryPrimitives.ReadUInt16LittleEndian(wav.AsSpan(o, 2));
+        uint U32(int o) => big ? BinaryPrimitives.ReadUInt32BigEndian(wav.AsSpan(o, 4))
+                               : BinaryPrimitives.ReadUInt32LittleEndian(wav.AsSpan(o, 4));
+
+        // Two independent parses of the head, because a chunk walk desyncs on inconsistent chunk sizes:
+        // (a) walk chunks by declared size; (b) literal marker scan. If EITHER parse yields a fmt+data
+        // pair, its values are validated; a hostile pair in either parse is rejected. A file with no
+        // parseable pair is left to the native decoder, which rejects it (frames compute from nothing).
+        int walkFmt = -1; long walkFmtSize = 0; long walkData = -1; long walkDeclared = 0;
+        long pos = 12;
+        while (pos + 8 <= wav.Length)
+        {
+            var id = Encoding.ASCII.GetString(wav, (int)pos, 4);
+            long size = U32((int)pos + 4);
+            if (id == "fmt " && walkFmt < 0) { walkFmt = (int)pos + 8; walkFmtSize = size; }
+            else if (id == "data" && walkData < 0) { walkData = pos + 8; walkDeclared = size; }
+            pos += 8 + size + (size & 1); // chunks are word-aligned
+        }
+        int litFmtMark = IndexOfAscii(wav, "fmt ", 0);
+        int litDataMark = litFmtMark >= 0 ? IndexOfAscii(wav, "data", litFmtMark + 4) : -1;
+        int litFmt = litFmtMark >= 8 ? litFmtMark + 8 : -1;           // fmt data starts after the marker+size
+        long litFmtSize = litFmtMark >= 8 ? U32(litFmtMark - 8) : 0;
+        long litData = litDataMark >= 8 ? litDataMark + 8 : -1;
+        long litDeclared = litDataMark >= 8 ? U32(litDataMark - 8) : 0;
+
+        if (walkFmt >= 0 && walkData >= 0) CheckPair(walkFmt, walkFmtSize, walkData, walkDeclared);
+        if (litFmt >= 0 && litData >= 0 && (litFmt != walkFmt || litData != walkData)) CheckPair(litFmt, litFmtSize, litData, litDeclared);
+
+        void CheckPair(int fmt, long fmtSize, long data, long declared)
+        {
+            if (fmt + 16 > wav.Length) return;
+            ushort tag = U16(fmt), channels = U16(fmt + 2), blockAlign = U16(fmt + 12), bits = U16(fmt + 14);
+            if (channels == 0 || blockAlign == 0)
+                throw new InvalidDataException("hostile WAV header: zero channels or blockAlign");
+            long clamped = Math.Min(declared, Math.Max(0, fileLen - data));
+            long blocks = clamped / blockAlign;
+            if (tag == 0x11) // WAVE_FORMAT_IMA_ADPCM — the CVE-2026-37555 codec
+            {
+                if (fmtSize < 20 || fmt + 20 > wav.Length)
+                    throw new InvalidDataException("hostile WAV header: truncated IMA ADPCM fmt chunk");
+                int spb = U16(fmt + 18);
+                long required = blockAlign < 4L * channels ? -1 : 2L * (blockAlign - 4L * channels) / channels + 1;
+                if (required < 0 || spb != required)
+                    throw new InvalidDataException("hostile WAV header: IMA ADPCM samplesperblock does not match blockAlign");
+                if ((long)spb * blocks > int.MaxValue)
+                    throw new InvalidDataException("hostile WAV header: IMA ADPCM samplesperblock*blocks overflows int32 (CVE-2026-37555)");
+            }
+            else if (tag == 1) // PCM
+            {
+                if (bits == 0) throw new InvalidDataException("hostile WAV header: PCM with zero bit depth");
+                if (clamped * 8 / ((long)bits * channels) > int.MaxValue)
+                    throw new InvalidDataException("hostile WAV header: PCM frame count overflows int32");
+            }
+        }
+    }
+
+    static int IndexOfAscii(byte[] hay, string needle, int start)
+    {
+        for (int i = Math.Max(0, start); i + 4 <= hay.Length; i++)
+            if (hay[i] == needle[0] && hay[i + 1] == needle[1] && hay[i + 2] == needle[2] && hay[i + 3] == needle[3])
+                return i;
+        return -1;
     }
 
     /// <summary>NAudio decodes these by file extension on Windows. shortcut: ogg, flac and pcm have no
