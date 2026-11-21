@@ -4,12 +4,14 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Hakata.Models;
 using Hakata.Services;
 using Hakata.ViewModels;
+using Hakata.Views;
 
 namespace Hakata;
 
@@ -255,5 +257,66 @@ public static partial class SelfTest
                 "override url: no speech request line carries the query token");
         }
         finally { listener.Stop(); }
+    }
+    /// <summary>An image URL found in rendered markdown must resolve through the same guarded fetch
+    /// as a validated link: only an absolute http(s) URL, judged at connect time on the exact
+    /// address the socket uses — so file: and every other scheme, relative paths, and local or
+    /// non-public targets are refused before anything is opened or connected, redirects are not
+    /// followed, and the body is capped. The app's engines share one resolver instance, obtained
+    /// here through the same factory the update window's engine is wired with.</summary>
+    static async Task SecurityRenderedImageResources()
+    {
+        var engine = MarkdownEngines.CreateGuarded();
+        Check(ReferenceEquals(engine.Plugins.PathResolver, MarkdownEngines.GuardedPathResolver),
+            "factory-built engine resolves images through the app's shared guarded resolver");
+        var resolver = MarkdownEngines.GuardedPathResolver;
+        // refused without any fetch: hostile schemes, local files, local targets, malformed values
+        string?[] refused =
+        {
+            "file:///etc/hostname", "FILE:///etc/hostname", "file:/etc/hostname", "file://localhost/etc/hostname",
+            "file:///mnt/p/Development/C%23/hakata/README.md", @"\\evil\share\x.png",
+            "data:image/png;base64,AAAA", "gopher://127.0.0.1:18743/x", "avares://hakata/Assets/app.png",
+            "image.png", "./rel.png", "/abs/local.png", "", "   ",
+            "http://127.0.0.1:18743/pixel.png", "https://[::1]/x.png", "http://0.0.0.0/x.png", "https://[::]/x.png",
+            "https://localhost/x.png", "http://sub.local/x.png", "http://host.internal/x.png",
+            "http://2130706433/x.png", "http://0x7f000001/x.png", "http://0177.0.0.1/x.png",
+            "HTTP://127.0.0.1/x.png", "http://user:pass@127.0.0.1/x.png", "http://127.0.0.1./x.png",
+            "http://[::ffff:127.0.0.1]/x.png", "http://[64:ff9b::7f00:1]/x.png", "http://[2002:7f00:1::]/x.png",
+            "http://[2001::80ff:fffe]/x.png", "http://[::7f00:1]/x.png",
+            "https://10.0.0.5/x.png", "https://172.16.0.1/x.png", "https://192.168.1.1/x.png",
+            "https://169.254.169.254/x.png", "https://100.64.0.1/x.png", "https://[fd00::1]/x.png",
+            "https://[fe80::1]/x.png", "https://[ff02::1]/x.png",
+        };
+        foreach (var r in refused)
+        {
+            var threw = false;
+            try { using var s = await resolver.ResolveImageResource(r!); }
+            catch (Exception) { threw = true; }
+            Check(threw, $"guarded image resolver refuses [{r ?? "<null>"}]");
+        }
+        // the legit shape still passes the guard decision (no external network in this sandbox)
+        Check(LinkGuard.IsFetchableLink("https://github.com/regularentropy/hakata/raw/main/docs/screenshot.png", out _),
+            "public https image URL passes the fetchable-link check");
+        Check(LinkGuard.IsFetchableLink("http://93.184.216.34/x.png", out _),
+            "public http image URL passes the fetchable-link check (scheme allowlist is http+https)");
+        // the client the resolver fetches with: no redirect following, address judged at connect time
+        SocketsHttpHandler? handler = null;
+        for (var t = typeof(HttpClient); t is not null && handler is null; t = t.BaseType)
+            foreach (var f in t.GetFields(BindingFlags.NonPublic | BindingFlags.Instance))
+                if (f.GetValue(LinkGuard.LinkHttp) is SocketsHttpHandler s) { handler = s; break; }
+        Check(handler is not null && !handler.AllowAutoRedirect,
+            "the shared fetch client does not follow redirects");
+        Check(handler?.ConnectCallback is not null,
+            "the shared fetch client validates the destination address at connect time");
+        // the body cap the resolver applies to every image response
+        Check(GuardedImageResolver.MaxImageBytes >= 1024 * 1024, "rendered-image body cap is set");
+        using var atCap = new MemoryStream(new byte[16]);
+        var body = await ProviderHttp.ReadBytesCappedAsync(new StreamContent(atCap), 16, CancellationToken.None);
+        Check(body.Length == 16, "a body exactly at the cap is accepted");
+        using var pastCap = new MemoryStream(new byte[17]);
+        var capThrew = false;
+        try { await ProviderHttp.ReadBytesCappedAsync(new StreamContent(pastCap), 16, CancellationToken.None); }
+        catch (HttpRequestException) { capThrew = true; }
+        Check(capThrew, "a body past the cap is refused");
     }
 }

@@ -18,12 +18,17 @@ public partial class UpdaterWindow : Window
     {
         InitializeComponent();
         // the release notes are feed-controlled markdown: a clicked link goes through the same
-        // validation as any external URL, so a non-http(s) scheme never reaches the OS handler
+        // validation as any external URL, so a non-http(s) scheme never reaches the OS handler,
+        // and an image the notes reference is fetched through the same guarded client, so it can
+        // neither open a local file nor probe this machine or the local network
         Opened += (_, _) =>
         {
             var viewer = this.GetVisualDescendants().OfType<MarkdownScrollViewer>().FirstOrDefault();
             if (viewer?.Engine is IMarkdownEngine engine)
+            {
                 engine.HyperlinkCommand = new GuardedHyperlinkCommand();
+                engine.Plugins.PathResolver = MarkdownEngines.GuardedPathResolver;
+            }
         };
     }
 

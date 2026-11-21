@@ -419,6 +419,11 @@ class TestProgram
             $"viewer HyperlinkCommand is {linkCmd?.GetType().Name ?? "null"}, not the package default");
         linkCmd?.Execute("file:///etc/hostname"); // guarded command: refused before any Process.Start
         Check(true, "guarded hyperlink command swallowed a file: link without dispatching");
+        // an image URL in the rendered notes must resolve through the app's guarded resolver,
+        // not the package default that fetches any http(s) URL and opens file: paths
+        var pathResolver = (viewer?.Engine as IMarkdownEngine)?.Plugins?.PathResolver;
+        Check(pathResolver is not null && ReferenceEquals(pathResolver, MarkdownEngines.GuardedPathResolver),
+            $"viewer PathResolver is {pathResolver?.GetType().Name ?? "null"}, the app's guarded resolver");
         window.Close();
 
         Console.WriteLine(failures == 0 ? "updatertest: ok" : $"updatertest: {failures} failure(s)");
