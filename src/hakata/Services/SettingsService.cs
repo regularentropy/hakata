@@ -25,7 +25,9 @@ public sealed class SettingsService(AppSettings settings)
         if (!File.Exists(AppSettings.FilePath)) return FreshInstall();
         try
         {
-            var raw = File.ReadAllText(AppSettings.FilePath);
+            // settings.json is KB-scale; a huge one is refused before it is read, and the
+            // transient posture below keeps it untouched (writing disabled this run)
+            var raw = StoreFile.ReadAllTextCapped(AppSettings.FilePath, StoreFile.MaxStoreBytes);
             var settings = JsonSerializer.Deserialize<AppSettings>(raw, AppJson.Options) ?? Corrupt();
             Normalize(settings);
             StoreFile.RestrictFile(AppSettings.FilePath); // the file holds keys: owner-only off Windows (S1.8)

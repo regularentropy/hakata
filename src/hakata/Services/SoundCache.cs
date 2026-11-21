@@ -35,7 +35,9 @@ public sealed class SoundCache(string folder)
         {
             var k = HistoryCrypto.LoadKey(folder, "cache.key");
             if (k is null) return null; // no readable key: the cache is a miss, never an error
-            var bytes = File.ReadAllBytes(PathOf(entryId, key, k));
+            // a clip is capped at write time; a bigger file is refused before it is read and
+            // simply counts as a cache miss, like any unreadable clip
+            var bytes = StoreFile.ReadAllBytesCapped(PathOf(entryId, key, k), StoreFile.MaxStoreBytes);
             if (!HistoryCrypto.IsEncrypted(bytes)) return null;
             var plain = HistoryCrypto.Decrypt(k, bytes);
             var split = Array.IndexOf(plain, (byte)'\n');

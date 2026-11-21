@@ -40,7 +40,8 @@ public partial class SettingsWindow : Window
         // (e.g. chmod 000) must not brick the window — the handlers re-read it under SafeUi.Guard
         var keyPath = HistoryCrypto.KeyPath(dir);
         var isPassword = false;
-        try { isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(File.ReadAllText(keyPath)); }
+        // the key file is a small header; a huge one is refused before it is read (treated as unreadable)
+        try { isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(StoreFile.ReadAllTextCapped(keyPath, StoreFile.MaxStoreBytes)); }
         catch (Exception) { }
         HistoryPasswordButton.Content = isPassword
             ? "Remove password protection"
@@ -82,7 +83,7 @@ public partial class SettingsWindow : Window
         await SafeUi.Guard(async () =>
         {
             var keyPath = HistoryCrypto.KeyPath(dir);
-            var isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(File.ReadAllText(keyPath));
+            var isPassword = File.Exists(keyPath) && HistoryCrypto.IsPasswordHeader(StoreFile.ReadAllTextCapped(keyPath, StoreFile.MaxStoreBytes));
             if (isPassword)
             {
                 if (!passwordArmed)
@@ -125,14 +126,14 @@ public partial class SettingsWindow : Window
         await SafeUi.Guard(async () =>
         {
             var keyPath = HistoryCrypto.KeyPath(dir);
-            if (!File.Exists(keyPath) || !HistoryCrypto.IsPasswordHeader(File.ReadAllText(keyPath))) return;
+            if (!File.Exists(keyPath) || !HistoryCrypto.IsPasswordHeader(StoreFile.ReadAllTextCapped(keyPath, StoreFile.MaxStoreBytes))) return;
             var dek = history.DataKey;
             if (dek is null)
             {
                 var current = await PasswordWindow.PromptUnlockAsync(this,
-                    pw => HistoryCrypto.UnwrapPassword(File.ReadAllText(keyPath), pw) is not null);
+                    pw => HistoryCrypto.UnwrapPassword(StoreFile.ReadAllTextCapped(keyPath, StoreFile.MaxStoreBytes), pw) is not null);
                 if (current is null) return;
-                dek = HistoryCrypto.UnwrapPassword(File.ReadAllText(keyPath), current);
+                dek = HistoryCrypto.UnwrapPassword(StoreFile.ReadAllTextCapped(keyPath, StoreFile.MaxStoreBytes), current);
             }
             if (dek is null) { viewModel.Error = "Could not read the history key"; return; }
             var password = await PasswordWindow.PromptSetAsync(this);
@@ -182,16 +183,16 @@ public partial class SettingsWindow : Window
             var file = files.FirstOrDefault();
             if (file is null) return;
             var localPath = file.TryGetLocalPath();
+            // a preset file is KB-scale; an oversized one is refused before it is read whole
             string text;
             if (localPath is not null)
             {
-                text = await File.ReadAllTextAsync(localPath);
+                text = await StoreFile.ReadAllTextCappedAsync(localPath, StoreFile.MaxStoreBytes);
             }
             else
             {
                 await using var stream = await file.OpenReadAsync();
-                using var reader = new StreamReader(stream);
-                text = await reader.ReadToEndAsync();
+                text = await StoreFile.ReadAllTextCappedAsync(stream, StoreFile.MaxStoreBytes);
             }
             var added = viewModel.Presets.MergeJson(text);
             viewModel.Error = added > 0 ? $"Added {added} preset{(added == 1 ? "" : "s")}" : "No new presets in that file";

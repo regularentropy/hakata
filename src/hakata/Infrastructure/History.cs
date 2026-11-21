@@ -80,7 +80,19 @@ public sealed class History : IDisposable
                 writable = true;
                 return;
             }
-            var bytes = File.ReadAllBytes(path);
+            byte[] bytes;
+            try { bytes = StoreFile.ReadAllBytesCapped(path, StoreFile.MaxStoreBytes); }
+            catch (InvalidDataException)
+            {
+                // over the cap: the store is refused without reading its bytes. An oversized
+                // encrypted store keeps the tampered-store posture (kept in place, never
+                // overwritten); a plaintext one is still moved aside like any unreadable store
+                if (HistoryCrypto.IsEncryptedAt(path))
+                    UnreadableNoWrite("history.db is over the supported store size; history is not saved this run");
+                else
+                    UnreadableMoveAside(path);
+                return;
+            }
             if (!HistoryCrypto.IsEncrypted(bytes))
             {
                 // a plaintext store is not a format this build reads: keep it aside like any
@@ -130,7 +142,8 @@ public sealed class History : IDisposable
     {
         if (!KeyFileIsPassword()) return false;
         string header;
-        try { header = File.ReadAllText(HistoryCrypto.KeyPath(dir)); }
+        // the key file is a small wrap header; a huge one is refused before it is read
+        try { header = StoreFile.ReadAllTextCapped(HistoryCrypto.KeyPath(dir), StoreFile.MaxStoreBytes); }
         catch (Exception) { return false; } // the key file vanished between the check and the read
         var dek = HistoryCrypto.UnwrapPassword(header, password);
         if (dek is null) return false;

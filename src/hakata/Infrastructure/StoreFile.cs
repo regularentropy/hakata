@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Hakata.Infrastructure;
 
@@ -36,6 +37,82 @@ internal static class StoreFile
             if ((current & ~wanted) != 0) File.SetUnixFileMode(dir, wanted);
         }
         catch (Exception) { /* a mode that cannot be narrowed is not worth failing the caller */ }
+    }
+
+    /// <summary>
+    /// Upper bound for one store-file read (history.db, settings.json, a key file, a cache clip,
+    /// an imported preset). The history holds at most 200 entries and cache clips are capped at
+    /// write time, so 64 MB is generous for every store this app writes; a bigger file is not one
+    /// of ours and must never size a buffer.
+    /// </summary>
+    internal const long MaxStoreBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Opens a store file for reading only when its size is within the cap: the length is checked
+    /// on the open handle before anything is allocated, so an oversized file is refused without
+    /// being read (a later swap of the file cannot enlarge the allocation either, because the
+    /// buffer is sized from this handle's length). Throws <see cref="InvalidDataException"/> when
+    /// the file is over <paramref name="max"/>.
+    /// </summary>
+    internal static FileStream OpenReadCapped(string path, long max)
+    {
+        var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.None);
+        try
+        {
+            if (fs.Length > max || fs.Length > int.MaxValue)
+                throw new InvalidDataException($"{Path.GetFileName(path)} is {fs.Length} bytes, over the {max}-byte cap");
+            return fs;
+        }
+        catch
+        {
+            fs.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Reads a whole store file, refusing an over-cap file before allocating (see <see cref="OpenReadCapped"/>).</summary>
+    internal static byte[] ReadAllBytesCapped(string path, long max)
+    {
+        using var fs = OpenReadCapped(path, max);
+        var bytes = new byte[(int)fs.Length];
+        fs.ReadExactly(bytes);
+        return bytes;
+    }
+
+    /// <summary>Reads a whole text store file, refusing an over-cap file before allocating (see <see cref="OpenReadCapped"/>).</summary>
+    internal static string ReadAllTextCapped(string path, long max)
+    {
+        using var fs = OpenReadCapped(path, max);
+        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>Async twin of <see cref="ReadAllTextCapped"/> for a path.</summary>
+    internal static async Task<string> ReadAllTextCappedAsync(string path, long max)
+    {
+        using var fs = OpenReadCapped(path, max);
+        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync();
+    }
+
+    /// <summary>
+    /// Reads text from an already-open stream under the cap. The stream may not be seekable, so
+    /// its length cannot be checked up front — the cap is enforced while reading instead, so a
+    /// huge stream still never drives an allocation past it.
+    /// </summary>
+    internal static async Task<string> ReadAllTextCappedAsync(Stream stream, long max)
+    {
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var text = new StringBuilder();
+        var buf = new char[81920];
+        int n;
+        while ((n = await reader.ReadAsync(buf)) > 0)
+        {
+            if (text.Length + n > max)
+                throw new InvalidDataException($"store text is over the {max}-byte cap");
+            text.Append(buf, 0, n);
+        }
+        return text.ToString();
     }
 
     /// <summary>

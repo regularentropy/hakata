@@ -129,6 +129,7 @@ public static partial class SelfTest
         await WithTimeout(AlternativesCountFlows(), "alternatives count flows");
         await WithTimeout(HistoryRoundTrip, "history round trip");
         await WithTimeout(HistoryEncryption, "history encryption");
+        await WithTimeout(HistoryStoreSizeCaps, "history store size caps");
         await WithTimeout(SoundCacheEncryption, "sound cache encryption");
         await WithTimeout(HistoryPasswordProtection, "history password protection");
         // (the atomic key-file rewrite is checked inside HistoryPasswordProtection; no check for the

@@ -293,6 +293,100 @@ public static partial class SelfTest
         }
     }
 
+    /// <summary>Store-file reads are size-capped before any buffer is sized from the file: an
+    /// over-cap file is refused without being read, an at-cap file still reads, an over-cap
+    /// encrypted store keeps the tampered-store posture (reported, kept in place, never
+    /// overwritten), and no buffer sized by unauthenticated bytes is allocated before the
+    /// authentication tag verifies.</summary>
+    static void HistoryStoreSizeCaps()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            // the capped read helpers: small and at-cap files pass, cap+1 is refused
+            const int cap = 4096;
+            var small = Path.Combine(dir, "small.bin");
+            File.WriteAllBytes(small, "hello store"u8.ToArray());
+            Check(StoreFile.ReadAllBytesCapped(small, cap).SequenceEqual("hello store"u8.ToArray()),
+                "store caps: a small file reads through the capped helper");
+            var atCap = Path.Combine(dir, "atcap.bin");
+            File.WriteAllBytes(atCap, new byte[cap]);
+            Check(StoreFile.ReadAllBytesCapped(atCap, cap).Length == cap,
+                "store caps: a file exactly at the cap still reads");
+            var overCap = Path.Combine(dir, "overcap.bin");
+            File.WriteAllBytes(overCap, new byte[cap + 1]);
+            try { StoreFile.ReadAllBytesCapped(overCap, cap); Check(false, "store caps: a file over the cap is refused"); }
+            catch (InvalidDataException) { Check(true, "store caps: a file over the cap is refused"); }
+            var textFile = Path.Combine(dir, "store.json");
+            File.WriteAllText(textFile, "{\"a\":1}");
+            Check(StoreFile.ReadAllTextCapped(textFile, cap) == "{\"a\":1}",
+                "store caps: a small text file reads through the capped helper");
+            Check(StoreFile.ReadAllTextCappedAsync(textFile, cap).GetAwaiter().GetResult() == "{\"a\":1}",
+                "store caps: the async capped helper passes a small text file");
+            File.WriteAllText(textFile, new string('x', cap + 1));
+            try { StoreFile.ReadAllTextCapped(textFile, cap); Check(false, "store caps: an over-cap text file is refused"); }
+            catch (InvalidDataException) { Check(true, "store caps: an over-cap text file is refused"); }
+            try { StoreFile.ReadAllTextCappedAsync(textFile, cap).GetAwaiter().GetResult(); Check(false, "store caps: the async capped helper refuses an over-cap text file"); }
+            catch (InvalidDataException) { Check(true, "store caps: the async capped helper refuses an over-cap text file"); }
+
+            // an over-cap encrypted store: reported, kept in place, never read whole, never overwritten
+            var key = HistoryCrypto.LoadOrCreateKey(dir);
+            var dbPath = Path.Combine(dir, "history.db");
+            var over = new byte[StoreFile.MaxStoreBytes + 1];
+            "OTENC1"u8.CopyTo(over); // magic only — the rest is unauthenticated garbage
+            File.WriteAllBytes(dbPath, over);
+            var big = new History(dir);
+            big.Load();
+            Check(big.Entries.Count == 0 && big.RecoveryNotice is { Length: > 0 }
+                && File.Exists(dbPath) && new FileInfo(dbPath).Length == over.Length
+                && !File.Exists(dbPath + ".unreadable"),
+                "store caps: an over-cap encrypted store is reported and kept in place, not moved aside");
+            big.Add(new HistoryEntry { From = "en", To = "de", Source = "x", Output = "y" });
+            Check(new FileInfo(dbPath).Length == over.Length,
+                "store caps: an over-cap store is not overwritten by a save");
+            // Decrypt called directly on over-cap bytes refuses at the cap, before any tag work
+            try { HistoryCrypto.Decrypt(key!, over); Check(false, "store caps: Decrypt refuses an over-cap buffer"); }
+            catch (AuthenticationTagMismatchException) { Check(false, "store caps: Decrypt refuses an over-cap buffer at the cap, not by the tag"); }
+            catch (CryptographicException) { Check(true, "store caps: Decrypt refuses an over-cap buffer at the cap, not by the tag"); }
+
+            // an over-cap plaintext store is still moved aside like any unreadable one
+            var dir2 = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(dir2);
+            try
+            {
+                var plainPath = Path.Combine(dir2, "history.db");
+                File.WriteAllBytes(plainPath, new byte[StoreFile.MaxStoreBytes + 1]); // no magic
+                var plain = new History(dir2);
+                plain.Load();
+                Check(plain.RecoveryNotice is { Length: > 0 } && File.Exists(plainPath + ".unreadable") && !File.Exists(plainPath),
+                    "store caps: an over-cap plaintext store is moved aside without being read");
+            }
+            finally { try { Directory.Delete(dir2, true); } catch (Exception) { } }
+
+            // an under-cap well-formed store still reads, decrypts and reloads
+            var dir3 = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            try
+            {
+                var h = new History(dir3);
+                h.Add(new HistoryEntry { From = "en", To = "de", Source = "round trip", Output = "Rundreise" });
+                var stored = StoreFile.ReadAllBytesCapped(Path.Combine(dir3, "history.db"), StoreFile.MaxStoreBytes);
+                var plainBytes = HistoryCrypto.Decrypt(HistoryCrypto.LoadKey(dir3)!, stored);
+                Check(HistoryCrypto.IsEncrypted(stored) && plainBytes.Length > 0,
+                    "store caps: an under-cap store reads through the capped helper and decrypts");
+                var reloaded = new History(dir3);
+                reloaded.Load();
+                Check(reloaded.Entries.Count == 1 && reloaded.Entries[0].Source == "round trip" && reloaded.RecoveryNotice is null,
+                    "store caps: an under-cap store reloads normally");
+            }
+            finally { try { Directory.Delete(dir3, true); } catch (Exception) { } }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
     /// <summary>Clips are ciphertext at rest under a cache-owned key, the file name hides the content
     /// hash, and a keyless cache is a miss.</summary>
     static void SoundCacheEncryption()

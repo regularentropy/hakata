@@ -23,6 +23,19 @@ internal static class HistoryCrypto
 
     public static bool IsEncrypted(byte[] file) => file.AsSpan().StartsWith(Magic);
 
+    /// <summary>
+    /// True when the file at <paramref name="path"/> starts with the magic. Reads only the first
+    /// <see cref="Magic"/> bytes, never the whole file, so the posture for an oversized store can
+    /// be decided without sizing any buffer from it.
+    /// </summary>
+    public static bool IsEncryptedAt(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.None);
+        var head = new byte[Magic.Length];
+        return fs.ReadAtLeast(head, Magic.Length, throwOnEndOfStream: false) == Magic.Length
+            && head.AsSpan().SequenceEqual(Magic);
+    }
+
     public static byte[] Encrypt(byte[] key, byte[] plaintext)
     {
         var nonce = RandomNumberGenerator.GetBytes(NonceSize);
@@ -45,6 +58,11 @@ internal static class HistoryCrypto
         // decryption, not as a bad argument, so Load treats it like any tampered store
         if (file.Length < Magic.Length + NonceSize + TagSize || !IsEncrypted(file))
             throw new CryptographicException("not an encrypted history");
+        // an oversized file is not a store this app wrote (the history is capped at 200 entries):
+        // refuse it before the plaintext buffer below is sized from it, so unauthenticated bytes
+        // never drive an allocation even when Decrypt is called directly
+        if (file.Length > StoreFile.MaxStoreBytes)
+            throw new CryptographicException("encrypted store is over the size cap");
         var nonce = file.AsSpan(Magic.Length, NonceSize);
         var tag = file.AsSpan(Magic.Length + NonceSize, TagSize);
         var cipher = file.AsSpan(Magic.Length + NonceSize + TagSize);
@@ -70,7 +88,9 @@ internal static class HistoryCrypto
         var path = KeyPath(dir, fileName);
         if (!File.Exists(path)) return new(KeyKind.Missing, null);
         byte[] raw;
-        try { raw = File.ReadAllBytes(path); }
+        // the key file is a 32-byte DEK or a small wrap header; a huge one is not ours — refuse it
+        // before allocating (StoreFile.MaxStoreBytes bounds the read)
+        try { raw = StoreFile.ReadAllBytesCapped(path, StoreFile.MaxStoreBytes); }
         catch (Exception) { return new(KeyKind.Unreadable, null); }
         if (raw.AsSpan().StartsWith("pwd:v1:"u8)) return new(KeyKind.Password, null);
         if (OperatingSystem.IsWindows())
