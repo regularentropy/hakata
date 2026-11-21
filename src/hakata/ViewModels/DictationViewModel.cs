@@ -133,7 +133,7 @@ public sealed partial class DictationViewModel : Observable
             setError(true);
             var url = string.IsNullOrWhiteSpace(settings.SpeechUrl)
                 ? ProviderUrls.AudioUrl(settings.SpeechRoute.BaseUrl)
-                : settings.SpeechUrl.Trim();
+                : ProviderUrls.OverrideUrl(settings.SpeechUrl);
             // the provider answered: it just has no transcription route there, so name it and point at the fix
             status($"No transcription endpoint at {url} — set one under Settings → Speech to text.");
         }

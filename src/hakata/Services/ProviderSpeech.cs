@@ -31,7 +31,7 @@ public sealed partial class OpenAiCompatibleProvider
     {
         var route = settings.SpeechRoute;
         // a chat-only surface has no transcription route at all, so the user can name the endpoint instead
-        var url = string.IsNullOrWhiteSpace(settings.SpeechUrl) ? ProviderUrls.AudioUrl(route.BaseUrl) : settings.SpeechUrl.Trim();
+        var url = string.IsNullOrWhiteSpace(settings.SpeechUrl) ? ProviderUrls.AudioUrl(route.BaseUrl) : ProviderUrls.OverrideUrl(settings.SpeechUrl);
         var model = settings.EffectiveSpeechModel;
 
         double reported;
@@ -144,7 +144,7 @@ public sealed partial class OpenAiCompatibleProvider
     {
         var route = settings.SoundRoute;
         // a chat-only surface has no speech route at all, so the user can name the endpoint instead
-        var url = string.IsNullOrWhiteSpace(settings.SoundUrl) ? ProviderUrls.SpeakUrl(route.BaseUrl) : settings.SoundUrl.Trim();
+        var url = string.IsNullOrWhiteSpace(settings.SoundUrl) ? ProviderUrls.SpeakUrl(route.BaseUrl) : ProviderUrls.OverrideUrl(settings.SoundUrl);
         // no response_format on purpose: the provider then answers in a format its model supports, and the
         // response says which one (a wav-only model asked for mp3 just fails)
         var payload = new

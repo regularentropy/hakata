@@ -1,8 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using Hakata.Models;
 using Hakata.Services;
 using Hakata.ViewModels;
 
@@ -181,5 +186,74 @@ public static partial class SelfTest
         Check(!LinkGuard.MaySendCredentials(Req("https://api.openai.com/v1", apiKey),
                 new[] { IPAddress.Parse("151.101.1.69"), IPAddress.Parse("10.1.2.3") }),
             "credentialed host guard refuses a host that also resolves to a private address");
+    }
+
+    /// <summary>A URL named in settings for a request line must lose its query and fragment before
+    /// it can enter one: a pasted console URL carrying ?api_key=… would otherwise be disclosed in
+    /// the request line to the target host's logs and every on-path proxy — the same stripping the
+    /// base-URL-derived routes already get. Guarded at the shared derivation and end-to-end at
+    /// both speech call sites against a local listener, where the arriving request line must carry
+    /// no query at all. The token below is an invented test value.</summary>
+    static async Task SecuritySpeechOverrideUrls()
+    {
+        const string secret = "test-query-token-0001";
+        (string input, string expected)[] cases =
+        {
+            ("https://h/stt?api_key=" + secret, "https://h/stt"),
+            ("https://h/stt?api_key=" + secret + "#frag", "https://h/stt"),
+            ("https://h/stt#" + secret, "https://h/stt"),
+            ("https://h/stt?a=1&api_key=" + secret, "https://h/stt"),
+            ("https://h/stt?", "https://h/stt"),
+            ("https://h/stt%3Fapi_key=" + secret, "https://h/stt"),
+            ("https://h/stt%23" + secret, "https://h/stt"),
+            ("HTTPS://H:8443/STT?api_key=" + secret, "https://h:8443/STT"),
+            ("https://user:pass@h/stt?api_key=" + secret, "https://user:pass@h/stt"),
+            ("https://h/stt", "https://h/stt"), // a clean override passes through untouched
+        };
+        foreach (var (input, expected) in cases)
+            Check(ProviderUrls.OverrideUrl(input) == expected,
+                $"override url: [{input}] derives to [{expected}] — no query, no fragment");
+
+        Check(ProviderUrls.AudioUrl("https://x?api_key=" + secret) == "https://x/v1/audio/transcriptions",
+            "override url: a query on the base is still dropped before the /v1 prefix on the stt route");
+        Check(ProviderUrls.SpeakUrl("https://x?token=xyz") == "https://x/v1/audio/speech",
+            "override url: a query on the base is still dropped on the speak route");
+
+        var port = 18800 + Random.Shared.Next(0, 90);
+        var prefix = $"http://127.0.0.1:{port}/";
+        var seen = new List<string>();
+        using var listener = StartMock(prefix, ctx =>
+        {
+            lock (seen) seen.Add(ctx.Request.Url?.PathAndQuery ?? "<none>");
+            var speech = (ctx.Request.Url?.AbsolutePath ?? "").EndsWith("/speech", StringComparison.Ordinal);
+            var body = speech ? new byte[] { 0xFF, 0xFB, 0, 0 } : Encoding.UTF8.GetBytes("{\"text\":\"ok\"}");
+            ctx.Response.ContentType = speech ? "audio/mpeg" : "application/json";
+            ctx.Response.OutputStream.Write(body, 0, body.Length);
+            ctx.Response.Close();
+            return Task.CompletedTask;
+        }, "override url: mock listener start: ");
+        if (listener is null) return;
+        try
+        {
+            var settings = new AppSettings
+            {
+                Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1" }],
+                SpeechUrl = prefix + "stt?api_key=" + secret,
+                SoundUrl = prefix + "speech?api_key=" + secret,
+            };
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var provider = new OpenAiCompatibleProvider(http, settings);
+            var (audio, _, _) = await provider.SpeakAsync("probe", CancellationToken.None);
+            var text = await provider.TranscribeAsync(Wav.FromPcm(new byte[1600], 8000, 1, 16), CancellationToken.None);
+            Check(audio.Length == 4 && text == "ok",
+                "override url: both speech calls still succeed against the local listener");
+            List<string> lines;
+            lock (seen) lines = [.. seen];
+            Check(lines.Contains("/speech"), "override url: the speak POST arrived as '/speech' with no query");
+            Check(lines.Contains("/stt"), "override url: the transcribe POST arrived as '/stt' with no query");
+            Check(lines.All(l => !l.Contains(secret) && !l.Contains("api_key", StringComparison.Ordinal)),
+                "override url: no speech request line carries the query token");
+        }
+        finally { listener.Stop(); }
     }
 }

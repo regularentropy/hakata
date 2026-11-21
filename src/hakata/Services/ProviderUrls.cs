@@ -52,15 +52,32 @@ public static class ProviderUrls
 
     // A pasted base URL may carry a query (?token=...) or a fragment: appending a suffix after it
     // would land the suffix inside the query, so every request would 404 and the pasted token
-    // would leak into the request URLs. Both are cleared before anything is appended; a URL
-    // without either is returned untouched.
-    static string StripQuery(string url)
+    // would leak into the request URLs. Both are cleared before anything is appended, and so is a
+    // percent-encoded '?'/'#' inside the path, which would ride in the request line the same way;
+    // a URL without any of them is returned untouched.
+    internal static string StripQuery(string url)
     {
         var t = url.TrimEnd('/');
-        if (!Uri.TryCreate(t, UriKind.Absolute, out var u) || (u.Query.Length == 0 && u.Fragment.Length == 0))
-            return url;
-        return new UriBuilder(u) { Query = "", Fragment = "" }.Uri.ToString().TrimEnd('/');
+        if (!Uri.TryCreate(t, UriKind.Absolute, out var u)) return url;
+        var cut = CutAtEncodedDelimiter(u.AbsolutePath);
+        var b = new UriBuilder(u) { Query = "", Fragment = "" };
+        if (cut >= 0) b.Path = u.AbsolutePath[..cut];
+        return cut >= 0 || u.Query.Length > 0 || u.Fragment.Length > 0 ? b.Uri.ToString().TrimEnd('/') : url;
     }
+
+    // the first percent-encoded '?' or '#' in a path, or -1 when there is none
+    static int CutAtEncodedDelimiter(string path)
+    {
+        var q = path.IndexOf("%3f", StringComparison.OrdinalIgnoreCase);
+        var h = path.IndexOf("%23", StringComparison.OrdinalIgnoreCase);
+        return q < 0 ? h : h < 0 ? q : Math.Min(q, h);
+    }
+
+    /// <summary>A URL named in settings for a request line (a speech/sound endpoint override):
+    /// trimmed and passed through <see cref="StripQuery"/> — a pasted console URL carrying
+    /// ?api_key=… must not put its query into the request line, where the target host and every
+    /// on-path proxy would log it.</summary>
+    internal static string OverrideUrl(string url) => StripQuery(url.Trim());
 
     /// <summary>Speech-to-text endpoint beside the chat surface; a bare host gets the OpenAI-style /v1 prefix.</summary>
     public static string AudioUrl(string baseUrl) => AudioBase(baseUrl) + "/audio/transcriptions";
