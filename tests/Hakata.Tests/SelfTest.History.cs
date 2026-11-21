@@ -540,6 +540,103 @@ public static partial class SelfTest
         }
     }
 
+    /// <summary>The wrap header's iteration count is metadata, not a work factor: the KDF always
+    /// runs at the build's own constant, so a header claiming millions of iterations is refused
+    /// without a measurable KDF run, and past a cap of failed attempts unlock locks out until the
+    /// process restarts.</summary>
+    static void HistoryUnlockWorkFactor()
+    {
+        var flags = BindingFlags.NonPublic | BindingFlags.Static;
+        var pbkdf2 = (int)typeof(HistoryCrypto).GetField("Pbkdf2Iterations", flags)!.GetValue(null)!;
+        var maxAttempts = (int)typeof(HistoryCrypto).GetField("MaxUnlockAttempts", flags)!.GetValue(null)!;
+        var counter = typeof(HistoryCrypto).GetField("failedUnlockAttempts", flags)!;
+        void ResetAttempts() => counter.SetValue(null, 0);
+
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            var h = new History(dir);
+            h.Add(new HistoryEntry { From = "en", To = "de", Source = "locked one", Output = "gesperrt eins" });
+            var dek = HistoryCrypto.LoadKey(dir);
+            Check(dek is { Length: 32 }, "work factor: the machine key loads before protection");
+            var wrap = HistoryCrypto.WrapPassword(dek!, "hunter2");
+            var parts = wrap.Split(':');
+            Check(parts[3] == pbkdf2.ToString(),
+                "work factor: the written header carries the build's own constant count");
+            ResetAttempts();
+            Check(HistoryCrypto.UnwrapPassword(wrap, "hunter2") is { } ok && ok.SequenceEqual(dek!),
+                "work factor: a wrap written by this build still unwraps with its password");
+            Check(HistoryCrypto.UnwrapPassword(wrap, "nope") is null,
+                "work factor: a wrong password is still rejected");
+
+            // any other count in the header is refused before any KDF work runs: null, fast
+            ResetAttempts();
+            var worst = 0L;
+            foreach (var bad in new[] { "10000000", "9999999", "600001", "599999", "1", "0", "0600000", "2147483648", "-1", "abc", "" })
+            {
+                var p = (string[])parts.Clone();
+                p[3] = bad;
+                var sw = Stopwatch.StartNew();
+                var r = HistoryCrypto.UnwrapPassword(string.Join(':', p), "hunter2");
+                sw.Stop();
+                worst = Math.Max(worst, sw.ElapsedMilliseconds);
+                Check(r is null, $"work factor: header count '{bad}' does not unwrap");
+            }
+            Check(worst < 1000, $"work factor: every rejected count returned fast (worst {worst} ms)");
+
+            // structural variants: wrong part count, wrong magic/version, broken or huge base64 salt
+            ResetAttempts();
+            var hugeSalt = (string[])parts.Clone();
+            hugeSalt[2] = Convert.ToBase64String(new byte[1_000_000]);
+            hugeSalt[3] = "10000000";
+            var badB64 = (string[])parts.Clone();
+            badB64[2] = "!!!not-base64!!!";
+            var variants = new List<string>
+            {
+                wrap + ":extra",
+                string.Join(':', parts.Take(6)),
+                string.Join(':', new[] { "pwd", "v2", parts[2], parts[3], parts[4], parts[5], parts[6] }),
+                string.Join(':', new[] { "pw", "v1", parts[2], parts[3], parts[4], parts[5], parts[6] }),
+                string.Join(':', hugeSalt),
+                string.Join(':', badB64),
+                "",
+            };
+            var worstVar = 0L;
+            foreach (var v in variants)
+            {
+                var sw = Stopwatch.StartNew();
+                var r = HistoryCrypto.UnwrapPassword(v, "hunter2");
+                sw.Stop();
+                worstVar = Math.Max(worstVar, sw.ElapsedMilliseconds);
+                Check(r is null, $"work factor: malformed header ({v.Length} chars) does not unwrap");
+            }
+            Check(worstVar < 1000, $"work factor: every malformed header returned fast (worst {worstVar} ms)");
+
+            // lockout: past the cap of consecutive failed attempts even the correct password is
+            // refused, on the store-level unlock path too, until the process restarts
+            File.WriteAllText(HistoryCrypto.KeyPath(dir), wrap);
+            var locked = new History(dir);
+            locked.Load();
+            Check(locked.NeedsPassword, "work factor: the password-wrapped store asks for the password");
+            ResetAttempts();
+            for (var i = 0; i < maxAttempts; i++)
+                Check(!locked.LoadWithPassword("wrong"),
+                    $"work factor: failed unlock attempt {i + 1}/{maxAttempts} is rejected");
+            Check(!locked.LoadWithPassword("hunter2"),
+                "work factor: past the attempt cap even the correct password is refused (lockout)");
+            ResetAttempts();
+            Check(locked.LoadWithPassword("hunter2") && locked.Entries.Count == 1
+                && locked.Entries[0].Source == "locked one",
+                "work factor: once the counter is cleared the correct password unlocks again");
+            ResetAttempts();
+        }
+        finally
+        {
+            ResetAttempts();
+            try { Directory.Delete(dir, true); } catch (Exception) { }
+        }
+    }
+
     static void HistoryRoundTrip()
     {
         var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));

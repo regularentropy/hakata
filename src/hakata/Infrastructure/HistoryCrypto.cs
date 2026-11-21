@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using Hakata.Models;
 
 namespace Hakata.Infrastructure;
@@ -154,8 +155,11 @@ internal static class HistoryCrypto
     // or changing a password rewrites only this small file, and a copied folder + the password unlocks
     // the store on any machine
     const int Pbkdf2Iterations = 600_000;
-    // a crafted key-file header must not turn unlock into a hours-long PBKDF2 grind (DoS)
-    const int MaxPbkdf2Iterations = 10_000_000;
+    // the unlock dialog stays open on a wrong password, so failed attempts are counted and,
+    // past this cap, refused outright until the process restarts — a planted key file must
+    // not get unlimited retries
+    const int MaxUnlockAttempts = 10;
+    static int failedUnlockAttempts;
 
     /// <summary>pwd:v1:salt:iterations:nonce:tag:wrapped — PBKDF2-SHA256 derives the KEK, AES-GCM wraps the DEK.</summary>
     public static string WrapPassword(byte[] dek, string password)
@@ -171,25 +175,35 @@ internal static class HistoryCrypto
             Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(wrapped));
     }
 
-    /// <summary>The data key, or null on a wrong password (the GCM tag fails) or a malformed header.</summary>
+    /// <summary>The data key, or null on a wrong password (the GCM tag fails), a malformed header,
+    /// or once too many unlock attempts have failed in this process (lockout until restart).</summary>
     public static byte[]? UnwrapPassword(string header, string password)
     {
+        if (Volatile.Read(ref failedUnlockAttempts) >= MaxUnlockAttempts) return null;
+        byte[]? dek = null;
         try
         {
             var parts = header.Split(':');
-            if (parts.Length != 7 || parts[0] != "pwd" || parts[1] != "v1") return null;
-            if (!int.TryParse(parts[3], out var iterations) || iterations is < 1 or > MaxPbkdf2Iterations) return null;
-            var kek = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password),
-                Convert.FromBase64String(parts[2]), iterations, HashAlgorithmName.SHA256, 32);
-            var wrapped = Convert.FromBase64String(parts[6]);
-            var dek = new byte[wrapped.Length];
-            using var gcm = new AesGcm(kek, TagSize);
-            gcm.Decrypt(Convert.FromBase64String(parts[4]), wrapped, Convert.FromBase64String(parts[5]), dek);
-            return dek;
+            // the KDF work factor is this build's constant, never the header's count: a crafted
+            // key file must not be able to make one unlock grind for seconds of CPU, so a count
+            // other than the one this build writes is rejected before any KDF work runs
+            if (parts.Length == 7 && parts[0] == "pwd" && parts[1] == "v1"
+                && parts[3] == Pbkdf2Iterations.ToString())
+            {
+                var kek = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password),
+                    Convert.FromBase64String(parts[2]), Pbkdf2Iterations, HashAlgorithmName.SHA256, 32);
+                var wrapped = Convert.FromBase64String(parts[6]);
+                dek = new byte[wrapped.Length];
+                using var gcm = new AesGcm(kek, TagSize);
+                gcm.Decrypt(Convert.FromBase64String(parts[4]), wrapped, Convert.FromBase64String(parts[5]), dek);
+            }
         }
         catch (Exception)
         {
-            return null;
+            dek = null;
         }
+        if (dek is null) Interlocked.Increment(ref failedUnlockAttempts);
+        else Interlocked.Exchange(ref failedUnlockAttempts, 0);
+        return dek;
     }
 }

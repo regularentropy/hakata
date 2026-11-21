@@ -132,6 +132,7 @@ public static partial class SelfTest
         await WithTimeout(HistoryStoreSizeCaps, "history store size caps");
         await WithTimeout(SoundCacheEncryption, "sound cache encryption");
         await WithTimeout(HistoryPasswordProtection, "history password protection");
+        await WithTimeout(HistoryUnlockWorkFactor, "history unlock work factor");
         // (the atomic key-file rewrite is checked inside HistoryPasswordProtection; no check for the
         // window-activation refresh — a window event cannot be exercised headlessly)
         await WithTimeout(UsageLabelFallback, "usage label fallback");
