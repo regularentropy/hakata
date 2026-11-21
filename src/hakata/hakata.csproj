@@ -10,7 +10,7 @@
     <Product>Hakata</Product>
     <AssemblyName>hakata</AssemblyName>
     <!-- the About page and the update check read this number, so a release bumps one value -->
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
 	  
     <ApplicationManifest>app.manifest</ApplicationManifest>
