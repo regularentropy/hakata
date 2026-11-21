@@ -95,6 +95,24 @@ internal static class LinkGuard
         return !IsPublicAddress(ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip);
     }
 
+    /// <summary>The gate on a client that carries credentials: a request with an
+    /// Authorization header may only be sent to an https URL whose host resolves exclusively to
+    /// public addresses. Judged on exactly the addresses the connect will use, so a DNS answer that
+    /// changes between the check and the connect cannot slip a credential through. A headerless
+    /// request (no key configured) is always allowed, so keyless local servers stay reachable.</summary>
+    internal static bool MaySendCredentials(HttpRequestMessage request, IPAddress[] resolved)
+    {
+        if (request.Headers.Authorization is null) return true;
+        if (!string.Equals(request.RequestUri?.Scheme, "https", StringComparison.OrdinalIgnoreCase)) return false;
+        if (resolved.Length == 0) return false;
+        foreach (var address in resolved)
+        {
+            var mapped = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+            if (!IsPublicAddress(mapped)) return false;
+        }
+        return true;
+    }
+
     /// <summary>True when the address is safe to connect to: not loopback, link-local, site-local,
     /// unique-local, private, CGNAT, multicast, reserved or unspecified. IPv4-mapped IPv6 is judged
     /// as its IPv4, and so are the transition prefixes that embed an IPv4 target (NAT64, 6to4,

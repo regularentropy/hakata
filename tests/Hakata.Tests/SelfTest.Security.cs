@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Threading.Tasks;
 using Hakata.Services;
 using Hakata.ViewModels;
 
@@ -40,12 +43,11 @@ public static partial class SelfTest
             "update vm: a non-http html_url is refused with a status message and never dispatched");
     }
 
-    /// <summary>Security-scan entry R1 (2026-11-21): provider-returned audio bytes must pass a managed
-    /// WAV-header guard before any native decoder parses them — libsndfile CVE-2026-37555 overflows a
-    /// 32-bit int on samplesperblock*blocks. Invariant: a hostile IMA-ADPCM header is rejected in managed
-    /// code (the guard's InvalidDataException, so no SoundFileReader/AudioFileReader is ever constructed),
-    /// while a sane clip and the exact int32 boundary still decode. Payload layout matches the stored PoC
-    /// .security-scan/pocs/R1-1.cs.</summary>
+    /// <summary>Provider-returned audio bytes must pass a managed WAV-header guard before any native
+    /// decoder parses them — libsndfile CVE-2026-37555 overflows a 32-bit int on samplesperblock*blocks.
+    /// Invariant: a hostile IMA-ADPCM header is rejected in managed code (the guard's
+    /// InvalidDataException, so no SoundFileReader/AudioFileReader is ever constructed), while a sane
+    /// clip and the exact int32 boundary still decode.</summary>
     static void SecuritySpeechWavGuard()
     {
         static byte[] ImaAdpcm(uint dataLen, int blockAlign = 32771, int spb = 65535)
@@ -106,5 +108,78 @@ public static partial class SelfTest
             catch (Exception e) { Check(false, $"speech wav guard: OpenAudio threw {e.GetType().Name} (native decoder reached) — {e.Message}"); }
         }
         finally { try { File.Delete(path); } catch { } }
+    }
+
+    /// <summary>The main HttpClient must never carry an Authorization header to a cleartext or
+    /// non-public destination. The invariant is guarded at the sink (AppServices.ConnectGuardedAsync
+    /// → LinkGuard.MaySendCredentials): with a key attached, http:// and any
+    /// local/private/ULA/link-local/CGNAT target is refused — including IPv4-mapped,
+    /// NAT64/6to4/Teredo/IPv4-compatible wrappers, decimal/hex/octal IP literals, "localhost",
+    /// userinfo tricks and trailing-dot hosts; without a key, headerless requests to local servers
+    /// stay allowed (keyless Ollama/LM Studio); https + public host + key is allowed. The key below
+    /// is an invented test token.</summary>
+    static void SecurityCredentialedHostGuard()
+    {
+        const string apiKey = "test-bearer-key-0001";
+        static HttpRequestMessage Req(string url, string? key)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, url);
+            ProviderHttp.WithAuth(req, key);
+            return req;
+        }
+        static IPAddress[] Resolve(string url)
+        {
+            var host = new Uri(url).Host;
+            if (IPAddress.TryParse(host.Trim('[', ']'), out var ip)) return new[] { ip };
+            try { return Dns.GetHostAddressesAsync(host).GetAwaiter().GetResult(); }
+            catch (Exception) { return Array.Empty<IPAddress>(); } // unresolvable: refused downstream anyway
+        }
+        static bool Allowed(string url, string? key) => LinkGuard.MaySendCredentials(Req(url, key), Resolve(url));
+
+        // with a key attached, every cleartext or non-public target is refused
+        string[] hostile =
+        {
+            "http://127.0.0.1:18741/v1", "https://127.0.0.1:18741/v1", "http://[::1]:18741/v1", "https://[::1]/v1",
+            "http://0.0.0.0:18741/v1", "https://0.0.0.0/", "https://[::]/v1",
+            "http://10.0.0.5/v1", "https://172.16.0.1/v1", "https://172.31.255.255/v1", "https://192.168.1.1/v1",
+            "https://169.254.169.254/v1", "https://100.64.0.1/v1", "https://192.0.0.8/v1", "https://198.18.0.1/v1",
+            "https://224.0.0.1/v1", "https://240.0.0.1/v1", "https://[fd00::1]/v1", "https://[fe80::1]/v1", "https://[ff02::1]/v1",
+            "http://localhost:18741/v1", "https://localhost/v1", "http://127.0.0.1.:18741/v1", "https://sub.localhost/v1",
+            "http://user:pass@127.0.0.1:18741/v1", "HTTP://127.0.0.1:18741/v1", "http://x@127.0.0.1:18741/v1",
+            "http://2130706433:18741/v1", "http://0x7f000001:18741/v1", "http://0177.0.0.1:18741/v1",
+            "http://[::ffff:127.0.0.1]:18741/v1", "http://[64:ff9b::7f00:1]:18741/v1",
+            "http://[2002:7f00:1::]:18741/v1", "http://[2001::80ff:fffe]:18741/v1", "http://[::7f00:1]:18741/v1",
+            "http://93.184.216.34/v1", // even a public host: cleartext http must not carry the key
+        };
+        foreach (var h in hostile)
+            Check(!Allowed(h, apiKey), $"credentialed host guard refuses [{h}] with a key attached");
+
+        // transition-prefix wrappers judged directly on their address bytes (no DNS in the sandbox)
+        byte[][] wrappers =
+        {
+            new byte[] { 0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 1 },   // NAT64 64:ff9b::127.0.0.1
+            new byte[] { 0x20, 0x02, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },     // 6to4 2002:7f00:1::
+            new byte[] { 0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0xff, 0xfe }, // Teredo 2001::/~127.0.0.1
+            new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 1 },             // IPv4-compatible ::127.0.0.1
+        };
+        foreach (var w in wrappers)
+            Check(!LinkGuard.MaySendCredentials(Req("https://[64:ff9b::1]/v1", apiKey), new[] { new IPAddress(w) }),
+                $"credentialed host guard refuses wrapper [{new IPAddress(w)}]");
+
+        // no key configured: headerless requests to local servers are still allowed
+        foreach (var h in new[] { "http://127.0.0.1:18741/v1", "http://localhost:11434/v1", "http://[::1]:11434/v1" })
+            Check(Allowed(h, null), $"credentialed host guard allows headerless [{h}] (no key configured)");
+        Check(Allowed("http://127.0.0.1:18741/v1", "   "), "credentialed host guard allows a headerless request for a whitespace key");
+        Check(Req("http://127.0.0.1:18741/v1", null).Headers.Authorization is null,
+            "credentialed host guard: WithAuth attaches no Authorization header without a key");
+
+        // the real-provider path: https + public destination + key = allowed
+        Check(Allowed("https://93.184.216.34/v1", apiKey), "credentialed host guard allows https + public IP literal + key");
+        Check(LinkGuard.MaySendCredentials(Req("https://api.openai.com/v1", apiKey),
+                new[] { IPAddress.Parse("151.101.1.69"), IPAddress.Parse("2606:4700::1111") }),
+            "credentialed host guard allows https + public v4/v6 addresses + key");
+        Check(!LinkGuard.MaySendCredentials(Req("https://api.openai.com/v1", apiKey),
+                new[] { IPAddress.Parse("151.101.1.69"), IPAddress.Parse("10.1.2.3") }),
+            "credentialed host guard refuses a host that also resolves to a private address");
     }
 }

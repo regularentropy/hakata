@@ -169,6 +169,7 @@ public static partial class SelfTest
         await WithTimeout(InstanceGuardCases, "instance guard");
         await WithTimeout(Task.Run(SecurityLinks), "security links");
         await WithTimeout(Task.Run(SecuritySpeechWavGuard), "security speech wav guard");
+        await WithTimeout(Task.Run(SecurityCredentialedHostGuard), "security credentialed host guard");
 
         Console.WriteLine(failures == 0 ? "all checks passed" : $"{failures} check(s) failed");
         return failures == 0 ? 0 : 1;
