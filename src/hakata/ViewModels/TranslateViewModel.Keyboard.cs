@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using CommunityToolkit.Mvvm.Input;
-using Hakata.Models;
 
 namespace Hakata.ViewModels;
 

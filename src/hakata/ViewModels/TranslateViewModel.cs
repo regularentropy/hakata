@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Material.Icons;
 using Hakata.Infrastructure;
 using Hakata.Models;
 using Hakata.Services;
@@ -117,7 +116,7 @@ public sealed partial class TranslateViewModel : Observable, IDisposable
     void AddCost(double cost)
     {
         if (cost <= 0) return;
-        if (History.AddCost(cost)) Usage.SetUsage(History.Current);
+        if (History.AddCost(cost) && History.Current is { } current) Usage.SetUsage(current);
         else coordinator.AddPendingCost(cost);
     }
 

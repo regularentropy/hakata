@@ -5,7 +5,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Hakata.Infrastructure;
-using Hakata.Models;
 
 namespace Hakata.Services;
 
@@ -57,6 +56,7 @@ public sealed class SoundCache(string folder)
             Directory.CreateDirectory(folder);
             StoreFile.RestrictDir(folder); // clips are private; an env-mode dir may exist wider (S1.8)
             var k = HistoryCrypto.LoadOrCreateKey(folder, "cache.key");
+            if (k is null) return; // a locked key cannot encrypt: the write is a miss, not an error
             var plain = Encoding.UTF8.GetBytes(mimeType + "\n").Concat(audio).ToArray();
             var path = PathOf(entryId, key, k);
             // a clip of the user's text is private, like the history: the mode is set on the file

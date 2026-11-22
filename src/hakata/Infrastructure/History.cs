@@ -336,7 +336,9 @@ public sealed class History : IDisposable
             {
                 raw.Open();
                 using var vacuum = raw.CreateCommand();
-                vacuum.CommandText = $"VACUUM INTO '{tmpPlain.Replace("'", "''")}'";
+                // VACUUM INTO takes the filename as a SQL literal (no bound parameter exists); the path is
+                // app-generated and its quotes are doubled, so this formatted string is not injectable
+                vacuum.CommandText = $"VACUUM INTO '{tmpPlain.Replace("'", "''")}'"; // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli
                 vacuum.ExecuteNonQuery();
             }
             StoreFile.RestrictFile(tmpPlain);

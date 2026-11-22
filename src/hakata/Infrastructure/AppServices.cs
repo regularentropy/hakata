@@ -6,7 +6,6 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
-using Hakata.Models;
 using Hakata.Services;
 using Hakata.ViewModels;
 using Hakata.Views;
