@@ -11,6 +11,7 @@ using Hakata.Models;
 using Hakata.Services;
 using Hakata.ViewModels;
 using Hakata.Views;
+using Xunit;
 
 namespace Hakata;
 
@@ -19,7 +20,7 @@ namespace Hakata;
 /// notify PropertyChanged on every settable property. A silent setter is exactly how the sidebar
 /// star stayed grey — this makes the whole class of bug a red line instead of an audit find.
 /// </summary>
-internal static class PropertyTest
+public class PropertyTests
 {
     // only the prefixes the app's own XAML uses; an unknown prefix is a failure, not a skip
     static readonly Dictionary<string, string> Prefixes = new()
@@ -115,22 +116,18 @@ internal static class PropertyTest
     }
 
     /// <summary>
-    /// Plain run is a backlog report (exits 0); --strict turns the settable-without-notification
-    /// backlog into failures. The sweep cannot tell "set once before display" (TranslitSource, Cost)
-    /// from "mutated live" (Favorite); the allowlist above records the first kind, so strict can
-    /// still gate the second — run strict when touching a row or model type. Resolution rot and
-    /// throwing setters always fail.
+    /// The sweep cannot tell "set once before display" (TranslitSource, Cost) from "mutated live"
+    /// (Favorite); the allowlist above records the first kind, so the test gates the second.
+    /// Resolution rot and throwing setters always fail. Runs strict: every settable property of
+    /// a bound type must raise PropertyChanged.
     /// </summary>
-    public static int Run() => Run(false);
+    [Fact]
+    public void SettablePropertiesOfBoundTypesNotify() => Run(strict: true);
 
-    public static int Run(bool strict)
+    static void Run(bool strict)
     {
         var root = FindRoot();
-        if (root is null)
-        {
-            Console.WriteLine("propertytest: repo root not found, nothing checked");
-            return 0;
-        }
+        Assert.True(root is not null, "propertytest: repo root not found, nothing checked");
 
         var asm = typeof(ViewModels.AboutViewModel).Assembly;
         var bound = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.axaml", SearchOption.AllDirectories)
@@ -187,7 +184,7 @@ internal static class PropertyTest
         Console.WriteLine($"propertytest: {bound.Count} bound types, {probed} probed, {skipped.Count} skipped [{string.Join(", ", skipped)}]");
         Console.WriteLine($"propertytest: bound without notification [{string.Join(", ", noNotify)}]");
         Console.WriteLine($"propertytest: settable without notification [{string.Join(", ", silent)}]");
-        return fails.Count == 0 ? 0 : 1;
+        Assert.True(fails.Count == 0, $"{fails.Count} propertytest failure(s): {string.Join("; ", fails)}");
     }
 
     static string? FindRoot()

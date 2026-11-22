@@ -85,7 +85,7 @@ Hakata runs one instance per profile. A second launch brings the running window 
 
 ## Contributing
 
-Issues and pull requests are welcome on [GitHub](https://github.com/regularentropy/hakata). For a translation that went wrong, include the provider, model, language pair and text. Before sending a pull request, run the harness: `dotnet run --project tests/Hakata.Tests -- --selftest`.
+Issues and pull requests are welcome on [GitHub](https://github.com/regularentropy/hakata). For a translation that went wrong, include the provider, model, language pair and text. Before sending a pull request, run the tests: `dotnet test tests/Hakata.Tests`.
 
 ## License
 

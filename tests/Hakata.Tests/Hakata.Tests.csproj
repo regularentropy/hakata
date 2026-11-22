@@ -1,16 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- Exe so xunit.v3 generates its own Microsoft.Testing.Platform entry point, which owns Main -->
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <!-- the harness is an Exe that references the app, so publishing it would ship the app plus every
-         native library beside a test runner; the app project is the only publishable one -->
-    <IsPublishable>false</IsPublishable>
+	<IsPublishable>false</IsPublishable>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- casing matches the real paths: on a case-insensitive mount a mismatched reference makes
          MSBuild keep a second obj/ and drop the generated XAML partials between builds -->
     <ProjectReference Include="../../src/hakata/hakata.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.6" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
 </Project>

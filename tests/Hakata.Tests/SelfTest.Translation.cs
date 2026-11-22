@@ -14,11 +14,12 @@ using Hakata.Infrastructure;
 using Hakata.Models;
 using Hakata.Services;
 using Hakata.ViewModels;
+using Xunit;
 
 namespace Hakata;
 
 /// <summary>Dependency-free checks for the parts that break silently: endpoints, SSE, prompts, JSON parsing, history.</summary>
-public static partial class SelfTest
+public partial class SelfTest
 {
     /// <summary>The shared mock SSE answer: chunked text/event-stream, one write per chunk, then close.</summary>
     static async Task WriteSse(HttpListenerContext ctx, params string[] chunks)
@@ -32,35 +33,20 @@ public static partial class SelfTest
     }
 
     /// <summary>#0035: alternatives and insights run concurrently without cancelling each other,    /// and Cancel() still stops an extra that is in flight.</summary>
-    static async Task ExtrasDontCancelEachOther()
+    [Fact]
+    public async Task ExtrasDontCancelEachOther()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var coordinator = new TranslationCoordinator(new ExtraStub(), new AppSettings(), new History(dir));
         try
         {
             var alt = coordinator.AlternativesAsync("hello", "hallo", "en", "de");
             var insights = coordinator.InsightsAsync("hello", "hallo", "en", "de");
-            try
-            {
-                await Task.WhenAll(alt, insights);
-                Check(true, "extras: concurrent alternatives and insights both finish");
-            }
-            catch (Exception e)
-            {
-                Check(false, $"extras: concurrent alternatives and insights both finish ({e.GetType().Name}: {e.Message})");
-            }
+            await Task.WhenAll(alt, insights);
 
             var inFlight = coordinator.AlternativesAsync("hello", "hallo", "en", "de");
             coordinator.Cancel();
-            try
-            {
-                await inFlight;
-                Check(false, "extras: Cancel() stops an in-flight extra");
-            }
-            catch (OperationCanceledException)
-            {
-                Check(true, "extras: Cancel() stops an in-flight extra");
-            }
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await inFlight);
         }
         finally { try { Directory.Delete(dir, true); } catch (Exception) { } }
     }
@@ -75,80 +61,82 @@ public static partial class SelfTest
         protected override bool TryComputeLength(out long length) { length = declared; return true; }
     }
 
-    static void Sse()
+    [Fact]
+    public void Sse()
     {
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") == "Hi", "sse: delta");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"message\":{\"content\":\"Plain\"}}]}") == "Plain", "sse: non-streaming body");
-        Check(SseParser.ParseSseDelta("data: [DONE]") == null, "sse: done marker");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":{}}]}") == null, "sse: empty delta");
-        Check(SseParser.ParseSseDelta(": keepalive") == null, "sse: comment line");
-        Check(SseParser.ParseSseDelta("data: {broken") == null, "sse: malformed json");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") == "Hi", "sse: delta");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[{\"message\":{\"content\":\"Plain\"}}]}") == "Plain", "sse: non-streaming body");
+        Assert.True(SseParser.ParseSseDelta("data: [DONE]") == null, "sse: done marker");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":{}}]}") == null, "sse: empty delta");
+        Assert.True(SseParser.ParseSseDelta(": keepalive") == null, "sse: comment line");
+        Assert.True(SseParser.ParseSseDelta("data: {broken") == null, "sse: malformed json");
 
         var usage = SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7}}");
-        Check(usage is { PromptTokens: 12, CompletionTokens: 7, Estimated: false }, "sse: usage chunk parsed");
-        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"42\",\"completion_tokens\":\"7\"}}")
+        Assert.True(usage is { PromptTokens: 12, CompletionTokens: 7, Estimated: false }, "sse: usage chunk parsed");
+        Assert.True(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"42\",\"completion_tokens\":\"7\"}}")
               is { PromptTokens: 42, CompletionTokens: 7 },
             "sse: string usage counters are parsed, not thrown");
-        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42.0,\"completion_tokens\":7.9}}")
+        Assert.True(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42.0,\"completion_tokens\":7.9}}")
               is { PromptTokens: 42, CompletionTokens: 7 },
             "sse: float usage counters count, not dropped");
-        Check(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":true}}") is null,
+        Assert.True(SseParser.ParseSseUsage("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":true}}") is null,
             "sse: a non-numeric usage counter is ignored, not fatal");
-        Check(SseParser.ParseSseUsage("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") is null,
+        Assert.True(SseParser.ParseSseUsage("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") is null,
             "sse: a content chunk is not usage");
-        Check(SseParser.ParseSseUsage("data: [DONE]") is null, "sse: done marker is not usage");
+        Assert.True(SseParser.ParseSseUsage("data: [DONE]") is null, "sse: done marker is not usage");
 
         // a translation that stops mid-sentence has to be spotted: an exhausted output budget and a
         // dropped connection both end the stream, and only one of them says why
-        Check(SseParser.ParseSseFinish("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}") == "stop",
+        Assert.True(SseParser.ParseSseFinish("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}") == "stop",
             "sse: finish_reason read");
-        Check(SseParser.ParseSseFinish("data: {\"choices\":[{\"delta\":{}}]}") == "", "sse: no finish_reason");
-        Check(SseParser.ParseSseFinish("data: [DONE]") == "", "sse: done marker has no finish_reason");
-        Check(!SseParser.StreamWasCut(sawDone: true, "stop"), "cut: a clean stop is not a cut");
-        Check(SseParser.StreamWasCut(sawDone: true, "length"), "cut: an exhausted budget is a cut");
-        Check(SseParser.StreamWasCut(sawDone: false, ""), "cut: a dropped stream is a cut");
-        Check(!SseParser.StreamWasCut(sawDone: false, "stop"), "cut: the last chunk may carry the reason");
+        Assert.True(SseParser.ParseSseFinish("data: {\"choices\":[{\"delta\":{}}]}") == "", "sse: no finish_reason");
+        Assert.True(SseParser.ParseSseFinish("data: [DONE]") == "", "sse: done marker has no finish_reason");
+        Assert.True(!SseParser.StreamWasCut(sawDone: true, "stop"), "cut: a clean stop is not a cut");
+        Assert.True(SseParser.StreamWasCut(sawDone: true, "length"), "cut: an exhausted budget is a cut");
+        Assert.True(SseParser.StreamWasCut(sawDone: false, ""), "cut: a dropped stream is a cut");
+        Assert.True(!SseParser.StreamWasCut(sawDone: false, "stop"), "cut: the last chunk may carry the reason");
     }
 
     /// <summary>Issue #0015: malformed provider JSON degrades instead of throwing InvalidOperationException.</summary>
-    static void MalformedJson()
+    [Fact]
+    public void MalformedJson()
     {
         using var arrayRoot = JsonDocument.Parse("[1,2]");
-        Check(Jsons.Str(arrayRoot.RootElement, "a") == "", "json: Str on a non-object element returns empty");
-        Check(Jsons.TryGet("[1,2]", "a") is null, "json: TryGet on an array root returns null");
-        Check(Jsons.TryGet("\"just text\"", "a") is null, "json: TryGet on a string root returns null");
-        Check(Jsons.Elements("5", "x").Count() == 0, "json: Elements on a scalar root yields none");
-        Check(Jsons.Elements("\"s\"", "x").Count() == 0, "json: Elements on a string root yields none");
+        Assert.True(Jsons.Str(arrayRoot.RootElement, "a") == "", "json: Str on a non-object element returns empty");
+        Assert.True(Jsons.TryGet("[1,2]", "a") is null, "json: TryGet on an array root returns null");
+        Assert.True(Jsons.TryGet("\"just text\"", "a") is null, "json: TryGet on a string root returns null");
+        Assert.True(Jsons.Elements("5", "x").Count() == 0, "json: Elements on a scalar root yields none");
+        Assert.True(Jsons.Elements("\"s\"", "x").Count() == 0, "json: Elements on a string root yields none");
 
-        Check(SseParser.ParseSseUsage("data: [1, \"usage\"]") is null, "sse: usage line with an array root is null");
-        Check(SseParser.ParseSseDelta("data: [1,2,3]") is null, "sse: delta line with an array root is null");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":\"x\"}") is null, "sse: choices as string is null");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[\"x\"]}") is null, "sse: string choice entry is null");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":5}]}") is null, "sse: a scalar delta is null, not a crash");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"message\":\"x\"}]}") is null, "sse: a scalar message is null, not a crash");
-        Check(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}") == "Hi", "sse: an object delta still yields its content");
-        Check(SseParser.ParseSseFinish("data: [\"finish_reason\"]") == "", "sse: finish line with an array root is empty");
-        Check(SseParser.ParseSseFinish("data: {\"choices\":\"x\"}") == "", "sse: finish with choices as string is empty");
-        Check(SseParser.ParseSseFinish("data: {\"choices\":[\"x\"]}") == "", "sse: finish with a string choice is empty");
+        Assert.True(SseParser.ParseSseUsage("data: [1, \"usage\"]") is null, "sse: usage line with an array root is null");
+        Assert.True(SseParser.ParseSseDelta("data: [1,2,3]") is null, "sse: delta line with an array root is null");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":\"x\"}") is null, "sse: choices as string is null");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[\"x\"]}") is null, "sse: string choice entry is null");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[{\"delta\":5}]}") is null, "sse: a scalar delta is null, not a crash");
+        Assert.True(SseParser.ParseSseDelta("data: {\"choices\":[{\"message\":\"x\"}]}") is null, "sse: a scalar message is null, not a crash");
+        Assert.True(SseParser.ParseSseFinish("data: [\"finish_reason\"]") == "", "sse: finish line with an array root is empty");
+        Assert.True(SseParser.ParseSseFinish("data: {\"choices\":\"x\"}") == "", "sse: finish with choices as string is empty");
+        Assert.True(SseParser.ParseSseFinish("data: {\"choices\":[\"x\"]}") == "", "sse: finish with a string choice is empty");
 
         var broken = CatalogApi.ParseCatalog("{\"data\":[1, null, true, [], {\"id\":\"ok\"}]}");
-        Check(broken.Count == 1 && broken[0].Id == "ok", "catalog: non-object entries are skipped");
-        Check(CatalogApi.ParseCatalog("{\"data\":[\"m1\", {\"id\":\"m2\"}]}").Count == 2,
+        Assert.True(broken.Count == 1 && broken[0].Id == "ok", "catalog: non-object entries are skipped");
+        Assert.True(CatalogApi.ParseCatalog("{\"data\":[\"m1\", {\"id\":\"m2\"}]}").Count == 2,
             "catalog: bare string ids still parse alongside objects");
-        Check(CatalogApi.ParseCatalog("\"just a string\"").Count == 0, "catalog: a string root yields no models");
-        Check(CatalogApi.ParseCatalog("5").Count == 0, "catalog: a scalar root yields no models");
+        Assert.True(CatalogApi.ParseCatalog("\"just a string\"").Count == 0, "catalog: a string root yields no models");
+        Assert.True(CatalogApi.ParseCatalog("5").Count == 0, "catalog: a scalar root yields no models");
     }
 
     /// <summary>An endpoint that sends one endless SSE line must read as a cut stream, not blow up the memory.</summary>
-    static async Task SseOverflow()
+    [Fact]
+    public async Task SseOverflow()
     {
         // the padding sits inside a real delta, so an unbounded reader would yield "x" from this line
         var line = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"pad\":\"" + new string(' ', 2_000_000) + "\"}";
         var http = new HttpClient(new StubHandler(line + "\n\ndata: [DONE]\n\n"));
         var provider = new OpenAiCompatibleProvider(http, new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = "http://stub", Model = "mock" }] });
         var got = 0;
-        await foreach (var _ in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, default)) got++;
-        Check(got == 0, $"sse overflow: a giant line ends the stream without deltas ({got})");
+        await foreach (var _ in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, TestContext.Current.CancellationToken)) got++;
+        Assert.True(got == 0, $"sse overflow: a giant line ends the stream without deltas ({got})");
 
         // the same body split into normal chunks still streams: the reader is not simply broken
         var small = new HttpClient(new StubHandler(
@@ -156,8 +144,8 @@ public static partial class SelfTest
             "data: {\"choices\":[{\"delta\":{\"content\":\"cd\"}}]}\n\ndata: [DONE]\n\n"));
         var again = new OpenAiCompatibleProvider(small, new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = "http://stub", Model = "mock" }] });
         var text = "";
-        await foreach (var delta in again.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, default)) text += delta;
-        Check(text == "abcd", $"sse overflow: normal chunks still stream ('{text}')");
+        await foreach (var delta in again.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, TestContext.Current.CancellationToken)) text += delta;
+        Assert.True(text == "abcd", $"sse overflow: normal chunks still stream ('{text}')");
 
         // the other way a stream read must be bounded: not one giant line, but no data at all
         await SseStall();
@@ -252,7 +240,7 @@ public static partial class SelfTest
             catch (Exception e) { stallError = e.Message; }
         });
         if (await Task.WhenAny(direct, Task.Delay(TimeSpan.FromSeconds(6))) != direct) hung = true; else await direct;
-        Check(!hung && stallError?.Contains("stalled") == true,
+        Assert.True(!hung && stallError?.Contains("stalled") == true,
             $"sse stall: a silent stream ends the read with a stall error within 6s ('{stallError}')");
 
         // through the provider: the run must fail visibly, not hang — a stall is an error, not a user cancel
@@ -269,7 +257,7 @@ public static partial class SelfTest
             catch (Exception e) { runError = e.Message; }
         });
         if (await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(6))) != run) hung = true; else await run;
-        Check(!hung && runError?.Contains("stalled") == true,
+        Assert.True(!hung && runError?.Contains("stalled") == true,
             $"sse stall: a stalled stream fails the run with a visible error, not a hang ('{runError}')");
 
         // a slow but alive stream — every gap well inside the idle window, the total far past it — must complete
@@ -281,12 +269,13 @@ public static partial class SelfTest
         var got = new List<string?>();
         await foreach (var line in ProviderHttp.ReadLines(drip, ProviderHttp.MaxSseLine, default, TimeSpan.FromMilliseconds(400)))
             got.Add(line);
-        Check(got.Count == 8 && got.Contains("data: [DONE]"),
+        Assert.True(got.Count == 8 && got.Contains("data: [DONE]"),
             $"sse stall: the deadline restarts per read, a slow stream still completes ({got.Count} lines)");
     }
 
     /// <summary>Issue #0014: the final chunk can carry usage AND content — neither may swallow the other.</summary>
-    static async Task SseCombinedChunk()
+    [Fact]
+    public async Task SseCombinedChunk()
     {
         var http = new HttpClient(new StubHandler(
             "data: {\"choices\":[{\"delta\":{\"content\":\"ab\"}}]}\n\n" +
@@ -295,21 +284,21 @@ public static partial class SelfTest
         var provider = new OpenAiCompatibleProvider(http, new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = "http://stub", Model = "mock" }] });
         var text = "";
         TokenUsage? seen = null;
-        await foreach (var delta in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, default, u => seen = u))
+        await foreach (var delta in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, TestContext.Current.CancellationToken, u => seen = u))
             text += delta;
-        Check(text == "abcd", $"sse edge: usage and content on one line keeps both ('{text}')");
-        Check(seen is { PromptTokens: 12, CompletionTokens: 7 }, "sse edge: usage on the shared chunk is counted");
+        Assert.True(text == "abcd", $"sse edge: usage and content on one line keeps both ('{text}')");
+        Assert.True(seen is { PromptTokens: 12, CompletionTokens: 7 }, "sse edge: usage on the shared chunk is counted");
     }
 
     /// <summary>Issue #0014: [DONE] is terminal — the run must end there, not wait for EOF or read past it.</summary>
-    static async Task SseDoneTerminal()
+    [Fact]
+    public async Task SseDoneTerminal()
     {
         var port = 19180 + Random.Shared.Next(0, 90);
         var prefix = $"http://127.0.0.1:{port}/";
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "sse edge: mock server start: " + e.Message); return; }
+        listener.Start();
         _ = Task.Run(async () =>
         {
             try
@@ -325,7 +314,7 @@ public static partial class SelfTest
                 await Task.Delay(TimeSpan.FromMinutes(5)); // no EOF: the run must not wait for it
             }
             catch (Exception) { /* the client leaves at [DONE]; the aborted write is expected */ }
-        });
+        }, TestContext.Current.CancellationToken);
         try
         {
             var settings = new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", Model = "mock" }] };
@@ -336,28 +325,28 @@ public static partial class SelfTest
             var sw = Stopwatch.StartNew();
             try
             {
-                await foreach (var delta in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, default))
+                await foreach (var delta in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(), QualityTier.Standard, TestContext.Current.CancellationToken))
                 {
                     text += delta;
                     if (sw.Elapsed > TimeSpan.FromSeconds(20)) throw new TimeoutException();
                 }
             }
             catch (TimeoutException) { stalled = true; }
-            Check(!stalled, $"sse edge: [DONE] ends the run without waiting for EOF ({sw.ElapsedMilliseconds}ms)");
-            Check(text == "pre", $"sse edge: nothing after [DONE] is appended ('{text}')");
+            Assert.True(!stalled, $"sse edge: [DONE] ends the run without waiting for EOF ({sw.ElapsedMilliseconds}ms)");
+            Assert.True(text == "pre", $"sse edge: nothing after [DONE] is appended ('{text}')");
         }
         finally { listener.Stop(); }
     }
 
     /// <summary>Issue #0014: a length-limited run whose continuations are exhausted must signal the cut exactly once.</summary>
-    static async Task SseLengthSignal()
+    [Fact]
+    public async Task SseLengthSignal()
     {
         var port = 19280 + Random.Shared.Next(0, 90);
         var prefix = $"http://127.0.0.1:{port}/";
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "sse length: mock server start: " + e.Message); return; }
+        listener.Start();
         var served = 0;
         _ = Task.Run(async () =>
         {
@@ -381,7 +370,7 @@ public static partial class SelfTest
                 }
                 catch (Exception) { /* client gone after DONE */ }
             }
-        });
+        }, TestContext.Current.CancellationToken);
         try
         {
             var settings = new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", Model = "mock" }] };
@@ -390,40 +379,41 @@ public static partial class SelfTest
             var cuts = 0;
             var cutValue = false;
             await foreach (var delta in provider.TranslateAsync("hello", "en", "de", new TranslationOptions(),
-                QualityTier.Standard, default, null, c => { cuts++; cutValue = c; }))
+                QualityTier.Standard, TestContext.Current.CancellationToken, null, c => { cuts++; cutValue = c; }))
                 _ = delta;
-            Check(cuts == 1 && cutValue, $"sse length: onCut fires exactly once, true (got {cuts}x {cutValue})");
-            Check(served == 4, $"sse length: continuations exhausted after {served} requests");
+            Assert.True(cuts == 1 && cutValue, $"sse length: onCut fires exactly once, true (got {cuts}x {cutValue})");
+            Assert.True(served == 4, $"sse length: continuations exhausted after {served} requests");
 
-            var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+            var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
             var coordinator = new TranslationCoordinator(provider, settings, new History(dir));
             var outcome = await coordinator.TranslateAsync("hello", "en", "de", QualityTier.Standard, _ => { });
-            Check(outcome.Truncated, "sse length: a length-limited run is flagged Truncated");
+            Assert.True(outcome.Truncated, "sse length: a length-limited run is flagged Truncated");
             try { Directory.Delete(dir, true); } catch (Exception) { }
         }
         finally { listener.Stop(); }
     }
 
     /// <summary>Every provider reply is read up to a limit: a hostile endpoint costs a request, not the process.</summary>
-    static async Task BoundedResponses()
+    [Fact]
+    public async Task BoundedResponses()
     {
-        var text = await ProviderHttp.ReadTextCappedAsync(new StringContent(new string('x', 5_000_000)), 1_000, default);
-        Check(text.Length == 1_000, $"cap: a text body stops at the limit ({text.Length})");
+        var text = await ProviderHttp.ReadTextCappedAsync(new StringContent(new string('x', 5_000_000)), 1_000, TestContext.Current.CancellationToken);
+        Assert.True(text.Length == 1_000, $"cap: a text body stops at the limit ({text.Length})");
 
         // a truncated file is garbage, so an over-long one is refused rather than clipped
         var refused = false;
-        try { await ProviderHttp.ReadBytesCappedAsync(new ByteArrayContent(new byte[4096]), 1_024, default); }
+        try { await ProviderHttp.ReadBytesCappedAsync(new ByteArrayContent(new byte[4096]), 1_024, TestContext.Current.CancellationToken); }
         catch (HttpRequestException) { refused = true; }
-        Check(refused, "cap: a byte body past the limit is refused");
-        var fits = await ProviderHttp.ReadBytesCappedAsync(new ByteArrayContent(new byte[10]), 1_024, default);
-        Check(fits.Length == 10, "cap: a body inside the limit arrives whole");
+        Assert.True(refused, "cap: a byte body past the limit is refused");
+        var fits = await ProviderHttp.ReadBytesCappedAsync(new ByteArrayContent(new byte[10]), 1_024, TestContext.Current.CancellationToken);
+        Assert.True(fits.Length == 10, "cap: a body inside the limit arrives whole");
 
         // a body that ends before the length its headers promised is a cut, not a complete answer
         var shortBody = new DeclaredContent(new byte[10], 1_000);
         var cut = false;
-        try { await ProviderHttp.ReadTextCappedAsync(shortBody, 4_000, default); }
+        try { await ProviderHttp.ReadTextCappedAsync(shortBody, 4_000, TestContext.Current.CancellationToken); }
         catch (HttpRequestException e) { cut = e.Message.Contains("cut short"); }
-        Check(cut, "cap: a body short of its declared length is refused");
+        Assert.True(cut, "cap: a body short of its declared length is refused");
 
         // a file link a provider hands back is followed only when it points at a public host
         foreach (var (url, what) in new[]
@@ -447,16 +437,17 @@ public static partial class SelfTest
             ("http://240.0.0.1/x", "reserved range"),
             ("http://198.18.0.1/x", "benchmarking range"),
         })
-            Check(!LinkGuard.IsFetchableLink(url, out _), $"link: {what} refused");
-        Check(LinkGuard.IsFetchableLink("http://8.8.8.8/x", out _), "link: a plain public IPv4 is still fetched");
-        Check(LinkGuard.IsFetchableLink("http://[2606:4700:4700::1111]/x", out _), "link: a plain public IPv6 is still fetched");
-        Check(LinkGuard.IsFetchableLink("https://cdn.example.com/clip.mp3?sig=1", out var publicUri)
+            Assert.True(!LinkGuard.IsFetchableLink(url, out _), $"link: {what} refused");
+        Assert.True(LinkGuard.IsFetchableLink("http://8.8.8.8/x", out _), "link: a plain public IPv4 is still fetched");
+        Assert.True(LinkGuard.IsFetchableLink("http://[2606:4700:4700::1111]/x", out _), "link: a plain public IPv6 is still fetched");
+        Assert.True(LinkGuard.IsFetchableLink("https://cdn.example.com/clip.mp3?sig=1", out var publicUri)
               && publicUri.Host == "cdn.example.com", "link: a public https file is fetched");
     }
 
-    static void ViewModelCases()
+    [Fact]
+    public void ViewModelCases()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var settings = new AppSettings
         {
             TargetLang = "de",
@@ -469,61 +460,62 @@ public static partial class SelfTest
             new OpenAiCompatibleProvider(http, settings), new MicrophoneRecorder(), new FakePlayer());
 
         vm.InputText = "hello";
-        Check(vm.CharCount == "5 characters" && !vm.InputHintVisible, "viewmodel: char count follows the input");
+        Assert.True(vm.CharCount == "5 characters" && !vm.InputHintVisible, "viewmodel: char count follows the input");
         vm.InputText = "a";
-        Check(vm.CharCount == "1 character", "viewmodel: one character stays singular");
+        Assert.True(vm.CharCount == "1 character", "viewmodel: one character stays singular");
         vm.InputText = "";
-        Check(vm.CharCount == "0 characters" && vm.InputHintVisible, "viewmodel: empty input shows the hint");
+        Assert.True(vm.CharCount == "0 characters" && vm.InputHintVisible, "viewmodel: empty input shows the hint");
 
-        Check(vm.Chrome.ComplexityIndex == (int)Complexity.Complex && vm.Chrome.StyleIndex == (int)Style.Creative,
+        Assert.True(vm.Chrome.ComplexityIndex == (int)Complexity.Complex && vm.Chrome.StyleIndex == (int)Style.Creative,
             "viewmodel: options initialise from the stored settings");
         vm.Chrome.ComplexityIndex = (int)Complexity.Simple;
-        Check(settings.Options.Complexity == Complexity.Simple, "viewmodel: option change is persisted");
+        Assert.True(settings.Options.Complexity == Complexity.Simple, "viewmodel: option change is persisted");
 
         // a plain-HTTP speech/sound endpoint carries the bearer key in the clear: the hint says so
         var svm = new SettingsViewModel(new SettingsService(new AppSettings()));
         svm.SpeechUrl = "http://gateway.internal/v1/audio";
-        Check(svm.SpeechUrlHint.Contains("unencrypted"), "settings: a plain-HTTP speech URL warns about the key");
+        Assert.True(svm.SpeechUrlHint.Contains("unencrypted"), "settings: a plain-HTTP speech URL warns about the key");
         svm.SoundUrl = "https://gateway.internal/v1/audio";
-        Check(!svm.SoundUrlHint.Contains("unencrypted"), "settings: an HTTPS sound URL stays unwarned");
+        Assert.True(!svm.SoundUrlHint.Contains("unencrypted"), "settings: an HTTPS sound URL stays unwarned");
 
         history.Add(new HistoryEntry { From = "en", To = "de", Source = "hello", Output = "hallo" });
         history.Add(new HistoryEntry { From = "auto", To = "fr", Source = "world", Output = "monde", Favorite = true });
         vm.History.Refresh();
-        Check(vm.History.Entries.Count == 2 && !vm.History.IsEmpty, "viewmodel: history lists every entry");
+        Assert.True(vm.History.Entries.Count == 2 && !vm.History.IsEmpty, "viewmodel: history lists every entry");
         vm.History.ShowFavoritesCommand.Execute(null);
-        Check(vm.History.Entries.Count == 1 && vm.History.Entries[0].Favorite && vm.History.IsFavoritesFilter,
+        Assert.True(vm.History.Entries.Count == 1 && vm.History.Entries[0].Favorite && vm.History.IsFavoritesFilter,
             "viewmodel: favorites filter drops the rest");
         vm.History.ShowAllCommand.Execute(null);
-        Check(vm.History.Entries.Count == 2 && vm.History.IsAllFilter, "viewmodel: all-entries filter restores the list");
+        Assert.True(vm.History.Entries.Count == 2 && vm.History.IsAllFilter, "viewmodel: all-entries filter restores the list");
 
-        Check(!vm.ExtrasEnabled, "viewmodel: extras disabled before a translation");
+        Assert.True(!vm.ExtrasEnabled, "viewmodel: extras disabled before a translation");
         vm.OutputText = "hallo";
-        Check(vm.ExtrasEnabled, "viewmodel: extras enabled once there is output");
+        Assert.True(vm.ExtrasEnabled, "viewmodel: extras enabled once there is output");
         vm.Detected = "Detected (German)";
         vm.InputText = "new text";
-        Check(vm.Detected.Length == 0, "viewmodel: editing the source drops the stale detection");
-        Check(vm.IsStale && !vm.ExtrasEnabled, "viewmodel: editing the source marks the output stale and disables extras");
-        Check(vm.StatusDisplay.Contains("Ctrl+Enter"), "viewmodel: the status line points at retranslation while stale");
+        Assert.True(vm.Detected.Length == 0, "viewmodel: editing the source drops the stale detection");
+        Assert.True(vm.IsStale && !vm.ExtrasEnabled, "viewmodel: editing the source marks the output stale and disables extras");
+        Assert.True(vm.StatusDisplay.Contains("Ctrl+Enter"), "viewmodel: the status line points at retranslation while stale");
         vm.IsStale = false;
         vm.InputText = new string('a', 20001);
-        Check(vm.IsLongInput, "viewmodel: long input is flagged");
+        Assert.True(vm.IsLongInput, "viewmodel: long input is flagged");
 
         var partial = coordinator.Commit("hi", "halb", "en", "de");
-        Check(history.Entries[0] == partial && partial.Output == "halb", "viewmodel: cancelled run keeps its partial output");
+        Assert.True(history.Entries[0] == partial && partial.Output == "halb", "viewmodel: cancelled run keeps its partial output");
         try { Directory.Delete(dir, true); } catch (Exception) { }
 
         // a key travels as a bearer header: an http endpoint sends it in the clear, and the row says so
         var dialog = new SettingsViewModel(new SettingsService(new AppSettings()), http);
         var row = dialog.Providers.Rows[0];
         row.BaseUrl = "http://localhost:11434/v1";
-        Check(row.HttpWarn.Length > 0, "settings: an http provider is flagged");
+        Assert.True(row.HttpWarn.Length > 0, "settings: an http provider is flagged");
         row.BaseUrl = "https://api.example/v1";
-        Check(row.HttpWarn.Length == 0, "settings: an https provider is not flagged");
+        Assert.True(row.HttpWarn.Length == 0, "settings: an https provider is not flagged");
     }
 
     /// <summary>The extras read the text on screen, so they go out on the tier that produced it.</summary>
-    static async Task ExtrasFollowTier()
+    [Fact]
+    public async Task ExtrasFollowTier()
     {
         // A answers its two calls in order: the alternatives, then the insights
         var (listenerA, baseA, bodiesA) = await StartMock(
@@ -548,20 +540,20 @@ public static partial class SelfTest
             using var http = new HttpClient();
             var provider = new OpenAiCompatibleProvider(http, settings);
 
-            var (description, alternatives) = await provider.AlternativesAsync("hello", "hallo", "en", "de", default);
-            Check(description == "from B" && alternatives.Count == 1 && bodiesA.Count == 0,
+            var (description, alternatives) = await provider.AlternativesAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken);
+            Assert.True(description == "from B" && alternatives.Count == 1 && bodiesA.Count == 0,
                 "extras: alternatives follow the Best tier's provider, not Standard's");
-            Check(bodiesB.Count == 1 && bodiesB[0].Contains("\"model\":\"model-b\""),
+            Assert.True(bodiesB.Count == 1 && bodiesB[0].Contains("\"model\":\"model-b\""),
                 "extras: the tier's own model is sent");
 
             settings.Tier = QualityTier.Standard;
-            var second = await provider.AlternativesAsync("hello", "hallo", "en", "de", default);
-            Check(second.Description == "from A" && bodiesA.Count == 1 && bodiesB.Count == 1,
+            var second = await provider.AlternativesAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken);
+            Assert.True(second.Description == "from A" && bodiesA.Count == 1 && bodiesB.Count == 1,
                 "extras: switching the tier switches the provider the extras use");
-            Check(bodiesA[0].Contains("\"model\":\"model-a\""), "extras: the Standard model is sent after the switch");
+            Assert.True(bodiesA[0].Contains("\"model\":\"model-a\""), "extras: the Standard model is sent after the switch");
 
-            await provider.InsightsAsync("hello", "hallo", "en", "de", default);
-            Check(bodiesA.Count == 2 && bodiesA[1].Contains("insights") && bodiesA[1].Contains("\"model\":\"model-a\""),
+            await provider.InsightsAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken);
+            Assert.True(bodiesA.Count == 2 && bodiesA[1].Contains("insights") && bodiesA[1].Contains("\"model\":\"model-a\""),
                 "extras: word insights follow the same tier");
         }
         finally
@@ -573,15 +565,16 @@ public static partial class SelfTest
 
     /// <summary>The alternatives count is a setting: it is clamped to 1..5, defaults to 3, and the
     /// real provider sends it into the prompt of every alternatives request.</summary>
-    static async Task AlternativesCountFlows()
+    [Fact]
+    public async Task AlternativesCountFlows()
     {
-        Check(new TranslationOptions().AlternativesCount == 3, "alternatives count: a fresh options default is 3");
+        Assert.True(new TranslationOptions().AlternativesCount == 3, "alternatives count: a fresh options default is 3");
         var clamped = new TranslationOptions();
         clamped.AlternativesCount = 99;
-        Check(clamped.AlternativesCount == 5, "alternatives count: 99 clamps to 5");
+        Assert.True(clamped.AlternativesCount == 5, "alternatives count: 99 clamps to 5");
         clamped.AlternativesCount = 0;
-        Check(clamped.AlternativesCount == 1, "alternatives count: 0 clamps to 1");
-        Check(Prompts.AlternativesSystem("en", "de", 3).Contains("exactly 3"),
+        Assert.True(clamped.AlternativesCount == 1, "alternatives count: 0 clamps to 1");
+        Assert.True(Prompts.AlternativesSystem("en", "de", 3).Contains("exactly 3"),
             "alternatives count: the default prompt still says exactly 3");
 
         var (listener, baseUrl, bodies) = await StartMock(
@@ -594,23 +587,23 @@ public static partial class SelfTest
             var provider = new OpenAiCompatibleProvider(http, settings);
 
             settings.Options.AlternativesCount = 5;
-            await provider.AlternativesAsync("hello", "hallo", "en", "de", default);
-            Check(bodies.Count == 1 && bodies[0].Contains("exactly 5") && !bodies[0].Contains("exactly 3"),
+            await provider.AlternativesAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken);
+            Assert.True(bodies.Count == 1 && bodies[0].Contains("exactly 5") && !bodies[0].Contains("exactly 3"),
                 "alternatives count: the setting reaches the request prompt");
 
             settings.Options.AlternativesCount = 3;
-            await provider.AlternativesAsync("hello", "hallo", "en", "de", default);
-            Check(bodies.Count == 2 && bodies[1].Contains("exactly 3"),
+            await provider.AlternativesAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken);
+            Assert.True(bodies.Count == 2 && bodies[1].Contains("exactly 3"),
                 "alternatives count: back at the default the prompt says exactly 3 again");
 
             // the field lives in the settings dialog: its Save is the write path that lands the value
             var dialog = new SettingsViewModel(new SettingsService(settings), http) { AlternativesCount = 4 };
             dialog.SaveCommand.Execute(null);
-            Check(settings.Options.AlternativesCount == 4,
+            Assert.True(settings.Options.AlternativesCount == 4,
                 "alternatives count: the settings dialog saves the field");
             dialog.AlternativesCount = 9; // the model clamps, so 9 lands as 5
             dialog.SaveCommand.Execute(null);
-            Check(settings.Options.AlternativesCount == 5,
+            Assert.True(settings.Options.AlternativesCount == 5,
                 "alternatives count: the dialog's value is clamped on save");
         }
         finally
@@ -619,14 +612,14 @@ public static partial class SelfTest
         }
     }
 
-    static async Task PricedRun()
+    [Fact]
+    public async Task PricedRun()
     {
         var port = 18980 + Random.Shared.Next(0, 200);
         var prefix = $"http://127.0.0.1:{port}/";
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "priced run: mock server start: " + e.Message); return; }
+        listener.Start();
 
         _ = Task.Run(async () =>
         {
@@ -635,7 +628,7 @@ public static partial class SelfTest
                 "data: {\"choices\":[{\"delta\":{\"content\":\"Hallo\"}}]}\n\n",
                 "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":500}}\n\n",
                 "data: [DONE]\n\n");
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings
         {
@@ -643,17 +636,17 @@ public static partial class SelfTest
             InputPricePerMTok = 3,
             OutputPricePerMTok = 15,
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var coordinator = new TranslationCoordinator(new OpenAiCompatibleProvider(http, settings), settings, history);
         try
         {
             var outcome = await coordinator.TranslateAsync("Hello", "en", "de", QualityTier.Standard, _ => { });
-            Check(outcome.Usage is { PromptTokens: 1000, CompletionTokens: 500 }, "priced run: reported usage is kept");
-            Check(Math.Abs(outcome.Entry.Cost - 0.0105) < 0.000001, $"priced run: cost is 1000×3 + 500×15 per 1M ({outcome.Entry.Cost})");
-            Check(outcome.Entry.CostLabel == "~$0.0105", "priced run: the history row carries its own cost");
-            Check(history.Entries[0].PromptTokens == 1000 && history.Entries[0].CompletionTokens == 500,
+            Assert.True(outcome.Usage is { PromptTokens: 1000, CompletionTokens: 500 }, "priced run: reported usage is kept");
+            Assert.True(Math.Abs(outcome.Entry.Cost - 0.0105) < 0.000001, $"priced run: cost is 1000×3 + 500×15 per 1M ({outcome.Entry.Cost})");
+            Assert.True(outcome.Entry.CostLabel == "~$0.0105", "priced run: the history row carries its own cost");
+            Assert.True(history.Entries[0].PromptTokens == 1000 && history.Entries[0].CompletionTokens == 500,
                 "priced run: token counts are stored with the entry");
         }
         finally
@@ -665,13 +658,13 @@ public static partial class SelfTest
 
     /// <summary>A provider that states its own bill (usage.cost) wins over the token×price math,
     /// streamed and non-streamed alike.</summary>
-    static async Task ReportedCostWins()
+    [Fact]
+    public async Task ReportedCostWins()
     {
         var prefix = $"http://127.0.0.1:{18990 + Random.Shared.Next(0, 200)}/";
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "reported cost: mock server start: " + e.Message); return; }
+        listener.Start();
 
         _ = Task.Run(async () =>
         {
@@ -699,7 +692,7 @@ public static partial class SelfTest
                     ctx.Response.Close();
                 }
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings
         {
@@ -707,7 +700,7 @@ public static partial class SelfTest
             InputPricePerMTok = 3,
             OutputPricePerMTok = 15,
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var provider = new OpenAiCompatibleProvider(http, settings);
@@ -715,16 +708,16 @@ public static partial class SelfTest
         try
         {
             var outcome = await coordinator.TranslateAsync("Hello", "en", "de", QualityTier.Standard, _ => { });
-            Check(Math.Abs(outcome.Entry.Cost - 0.0042) < 1e-9,
+            Assert.True(Math.Abs(outcome.Entry.Cost - 0.0042) < 1e-9,
                 $"reported cost: the streamed usage.cost beats the token math ({outcome.Entry.Cost})");
-            Check(outcome.Entry.CostLabel == "~$0.0042", "reported cost: the history row carries the reported money");
-            Check(outcome.Usage.PromptTokens == 1000 && outcome.Usage.CompletionTokens == 500,
+            Assert.True(outcome.Entry.CostLabel == "~$0.0042", "reported cost: the history row carries the reported money");
+            Assert.True(outcome.Usage.PromptTokens == 1000 && outcome.Usage.CompletionTokens == 500,
                 "reported cost: the reported counters are kept beside the cost");
 
             TokenUsage? seen = null;
-            await provider.DetectAsync("こんにちは", default, u => seen = u);
-            Check(seen is { ReportedCost: 0.0042 }, $"reported cost: a non-streaming usage.cost rides the usage ({seen})");
-            Check(seen is not null && Pricing.Cost(seen, 3, 15) == 0.0042,
+            await provider.DetectAsync("こんにちは", TestContext.Current.CancellationToken, u => seen = u);
+            Assert.True(seen is { ReportedCost: 0.0042 }, $"reported cost: a non-streaming usage.cost rides the usage ({seen})");
+            Assert.True(seen is not null && Pricing.Cost(seen, 3, 15) == 0.0042,
                 "reported cost: pricing uses the reported amount over the token math");
         }
         finally
@@ -736,31 +729,32 @@ public static partial class SelfTest
 
     /// <summary>#0033: the label renders the stored Cost (authoritative — it includes speech and
     /// reported usage.cost), never a tokens×prices recomputation; the cost shows iff Cost > 0.</summary>
-    static void UsageLabelFallback()
+    [Fact]
+    public void UsageLabelFallback()
     {
         var old = new HistoryEntry { PromptTokens = 1000, CompletionTokens = 500, Cost = 0.0105 };
-        Check(old.UsageLabel == "↑1000 ↓500 tokens · ~$0.0105",
+        Assert.True(old.UsageLabel == "↑1000 ↓500 tokens · ~$0.0105",
             $"usage label: an old entry shows its frozen cost ('{old.UsageLabel}')");
 
         // the stored cost wins even when prices are recorded; the prices stay persisted for the record
         var priced = new HistoryEntry { PromptTokens = 1000, CompletionTokens = 500, Cost = 0.5, InputPricePerMTok = 3, OutputPricePerMTok = 15 };
-        Check(priced.UsageLabel.EndsWith("~$0.5000"),
+        Assert.True(priced.UsageLabel.EndsWith("~$0.5000"),
             $"usage label: a priced entry shows its frozen cost, not the token math ('{priced.UsageLabel}')");
 
         var tokens = new HistoryEntry { PromptTokens = 12, CompletionTokens = 7 };
-        Check(tokens.UsageLabel == "↑12 ↓7 tokens" && !tokens.UsageLabel.Contains('$'),
+        Assert.True(tokens.UsageLabel == "↑12 ↓7 tokens" && !tokens.UsageLabel.Contains('$'),
             $"usage label: no cost, tokens only ('{tokens.UsageLabel}')");
     }
 
     /// <summary>Detect, alternatives, insights and transliteration are requests too: they land on the bill.</summary>
-    static async Task ExtraCosts()
+    [Fact]
+    public async Task ExtraCosts()
     {
         var port = 19680 + Random.Shared.Next(0, 200);
         var prefix = $"http://127.0.0.1:{port}/";
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "extras: mock server start: " + e.Message); return; }
+        listener.Start();
 
         // streams answer the translation; everything else gets a JSON body that carries its own usage
         _ = Task.Run(async () =>
@@ -806,7 +800,7 @@ public static partial class SelfTest
                 await ctx.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes(json));
                 ctx.Response.Close();
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings
         {
@@ -816,7 +810,7 @@ public static partial class SelfTest
             SourceLang = "auto",
             TargetLang = "en",
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var provider = new OpenAiCompatibleProvider(http, settings);
@@ -824,8 +818,8 @@ public static partial class SelfTest
         {
             // provider level: a complete answer reports the provider's own counters, not an estimate
             TokenUsage? seen = null;
-            await provider.DetectAsync("こんにちは", default, u => seen = u);
-            Check(seen is { PromptTokens: 10, CompletionTokens: 2, Estimated: false },
+            await provider.DetectAsync("こんにちは", TestContext.Current.CancellationToken, u => seen = u);
+            Assert.True(seen is { PromptTokens: 10, CompletionTokens: 2, Estimated: false },
                 $"extras: a body with usage reports those tokens ({seen})");
 
             // a body without usage bills an estimate instead
@@ -833,8 +827,8 @@ public static partial class SelfTest
             var plain = new OpenAiCompatibleProvider(new HttpClient(),
                 new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = plainUrl, Model = "mock" }] });
             TokenUsage? est = null;
-            await plain.DetectAsync("Hello", default, u => est = u);
-            Check(est is { Estimated: true, PromptTokens: > 0, CompletionTokens: > 0 },
+            await plain.DetectAsync("Hello", TestContext.Current.CancellationToken, u => est = u);
+            Assert.True(est is { Estimated: true, PromptTokens: > 0, CompletionTokens: > 0 },
                 $"extras: a body without usage is estimated ({est})");
             plainListener.Stop();
 
@@ -844,87 +838,87 @@ public static partial class SelfTest
             vm.InputText = "こんにちは";
             await vm.TranslateAsync();
             var entry = vm.History.Current;
-            Check(!vm.IsStale, "stale: a finished run is fresh");
+            Assert.True(!vm.IsStale, "stale: a finished run is fresh");
             vm.InputText = "こんにちは!";
-            Check(vm.IsStale && !vm.ExtrasEnabled, "stale: adding a letter marks the output stale");
+            Assert.True(vm.IsStale && !vm.ExtrasEnabled, "stale: adding a letter marks the output stale");
             vm.InputText = "こんにちは";
-            Check(!vm.IsStale && vm.ExtrasEnabled && vm.StatusDisplay.Contains("Done"),
+            Assert.True(!vm.IsStale && vm.ExtrasEnabled && vm.StatusDisplay.Contains("Done"),
                 "stale: deleting the letter back to the translated source clears the flag");
             // detect 10/2 (0.00006) rides the entry that also carries the run's 1000/500 (0.0105)
-            Check(entry is not null && Math.Abs(entry.Cost - 0.01056) < 0.000001,
+            Assert.True(entry is not null && Math.Abs(entry.Cost - 0.01056) < 0.000001,
                 $"extras: the detect cost rides the new entry ({entry?.Cost})");
             // #0033: the footer re-renders from the entry after every paid action; the fire-and-forget
             // transliteration may land in between, so wait for every tracked request and then poll
             await vm.WhenIdleAsync(); // the transliteration is tracked too, so the entry's bill is settled here
-            for (var i = 0; i < 50 && entry is not null && vm.Usage.UsageLabel != entry.UsageLabel; i++) await Task.Delay(20);
-            Check(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel,
+            for (var i = 0; i < 50 && entry is not null && vm.Usage.UsageLabel != entry.UsageLabel; i++) await Task.Delay(20, TestContext.Current.CancellationToken);
+            Assert.True(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel,
                 $"extras: the footer mirrors the current entry after the run ('{vm.Usage.UsageLabel}')");
             // transliteration is fire-and-forget and may already have landed (the poll above can take
             // a second), so assert against the entry's current cost, not the run-only ~$0.0106 — the
             // exact post-transliteration numbers are pinned by the checks below
-            Check(entry is not null && vm.Usage.UsageLabel.Contains(Pricing.CostLabel(entry.Cost)),
+            Assert.True(entry is not null && vm.Usage.UsageLabel.Contains(Pricing.CostLabel(entry.Cost)),
                 $"extras: the footer carries the entry's cost ('{vm.Usage.UsageLabel}')");
 
             // the transliteration runs beside the finished run: wait for it before the stepwise extras
-            for (var i = 0; i < 60 && !vm.HasTranslitTarget; i++) await Task.Delay(50); // 50/30 = 0.0006
-            Check(entry is not null && Math.Abs(entry.Cost - 0.01116) < 0.000001,
+            for (var i = 0; i < 60 && !vm.HasTranslitTarget; i++) await Task.Delay(50, TestContext.Current.CancellationToken); // 50/30 = 0.0006
+            Assert.True(entry is not null && Math.Abs(entry.Cost - 0.01116) < 0.000001,
                 $"extras: transliteration adds its cost ({entry?.Cost})");
-            Check(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0112"),
+            Assert.True(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0112"),
                 $"extras: the footer follows the entry after transliteration ('{vm.Usage.UsageLabel}')");
             // detect 10/2 rode the run's 1000/500, translit added 50/30 — both at the run's frozen prices
-            Check(entry is { PromptTokens: 1060, CompletionTokens: 532, InputPricePerMTok: 3, OutputPricePerMTok: 15, UsageEstimated: false },
+            Assert.True(entry is { PromptTokens: 1060, CompletionTokens: 532, InputPricePerMTok: 3, OutputPricePerMTok: 15, UsageEstimated: false },
                 $"extras: detect and transliteration tokens ride the entry, at the run's prices ({entry?.PromptTokens}/{entry?.CompletionTokens})");
 
             await vm.AlternativesAsync(); // 200/100 = 0.0021
-            Check(entry is not null && entry.AlternativesDescription == "plain"
+            Assert.True(entry is not null && entry.AlternativesDescription == "plain"
                 && entry.Alternatives is [{ Text: "Hi", Explanation: "shorter" }],
                 "extras: alternatives are stored on the entry");
-            Check(entry is not null && Math.Abs(entry.Cost - 0.01326) < 0.000001,
+            Assert.True(entry is not null && Math.Abs(entry.Cost - 0.01326) < 0.000001,
                 $"extras: alternatives add their cost ({entry?.Cost})");
-            Check(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0133"),
+            Assert.True(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0133"),
                 $"extras: the footer follows the entry after alternatives ('{vm.Usage.UsageLabel}')");
-            Check(entry is { PromptTokens: 1260, CompletionTokens: 632 },
+            Assert.True(entry is { PromptTokens: 1260, CompletionTokens: 632 },
                 $"extras: alternatives add their tokens ({entry?.PromptTokens}/{entry?.CompletionTokens})");
             await vm.InsightsAsync(); // 300/200 = 0.0039
-            Check(entry is not null && entry.Insights is [{ Word: "こんにちは", Kind: "greeting" }]
+            Assert.True(entry is not null && entry.Insights is [{ Word: "こんにちは", Kind: "greeting" }]
                 && entry.Insights[0].Alternatives is [{ Text: "hi" }],
                 "extras: insights are stored on the entry");
-            Check(entry is not null && Math.Abs(entry.Cost - 0.01716) < 0.000001,
+            Assert.True(entry is not null && Math.Abs(entry.Cost - 0.01716) < 0.000001,
                 $"extras: insights add their cost ({entry?.Cost})");
-            Check(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0172"),
+            Assert.True(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel && vm.Usage.UsageLabel.Contains("~$0.0172"),
                 $"extras: the footer follows the entry after insights ('{vm.Usage.UsageLabel}')");
-            Check(entry is { PromptTokens: 1560, CompletionTokens: 832 },
+            Assert.True(entry is { PromptTokens: 1560, CompletionTokens: 832 },
                 $"extras: insights add their tokens ({entry?.PromptTokens}/{entry?.CompletionTokens})");
-            Check(entry is not null && entry.UsageLabel.EndsWith(entry.CostLabel),
+            Assert.True(entry is not null && entry.UsageLabel.EndsWith(entry.CostLabel),
                 $"extras: the entry's usage label ends with its own frozen cost ('{entry?.UsageLabel}')");
-            Check(vm.History.SpendLabel.Contains("0.0172"),
+            Assert.True(vm.History.SpendLabel.Contains("0.0172"),
                 $"extras: the spend label carries the total ('{vm.History.SpendLabel}')");
 
             // the stored extras survive a reload and a restore shows them without a new request
             var reloaded = new History(dir);
             reloaded.Load();
             var persisted = reloaded.Entries.FirstOrDefault(e => e.Id == entry?.Id);
-            Check(persisted is { Alternatives.Count: 1, Insights.Count: 1 }
+            Assert.True(persisted is { Alternatives.Count: 1, Insights.Count: 1 }
                 && persisted.Alternatives[0].Text == "Hi" && persisted.Insights[0].Word == "こんにちは",
                 "extras: stored alternatives and insights survive a reload");
             vm.History.SelectedEntry = persisted; // restore fires on selection change
-            Check(vm.AlternativesVisible && vm.Alternatives.Count == 1 && vm.AlternativesDescription == "plain",
+            Assert.True(vm.AlternativesVisible && vm.Alternatives.Count == 1 && vm.AlternativesDescription == "plain",
                 $"extras: a restore shows the stored alternatives ('{vm.AlternativesDescription}')");
-            Check(vm.InsightsVisible && vm.Insights.Count == 1 && vm.Insights[0].Alternatives[0].Text == "hi",
+            Assert.True(vm.InsightsVisible && vm.Insights.Count == 1 && vm.Insights[0].Alternatives[0].Text == "hi",
                 "extras: a restore shows the stored insights");
 
             // closing a panel hides it and drops its extras from the entry and the store
             vm.History.Current = entry; // reference-compared: the reloaded copy must not swallow the switch
             vm.CloseAlternativesCommand.Execute(null);
-            Check(!vm.AlternativesVisible && vm.Alternatives.Count == 0
+            Assert.True(!vm.AlternativesVisible && vm.Alternatives.Count == 0
                 && entry is { Alternatives.Count: 0, AlternativesDescription: "" },
                 "extras: closing the alternatives panel hides it and drops them from the entry");
             vm.CloseInsightsCommand.Execute(null);
-            Check(!vm.InsightsVisible && entry is { Insights.Count: 0 },
+            Assert.True(!vm.InsightsVisible && entry is { Insights.Count: 0 },
                 "extras: closing the insights panel hides it and drops them from the entry");
             var again = new History(dir);
             again.Load();
-            Check(again.Entries.FirstOrDefault(e => e.Id == entry?.Id) is { Alternatives.Count: 0, Insights.Count: 0 },
+            Assert.True(again.Entries.FirstOrDefault(e => e.Id == entry?.Id) is { Alternatives.Count: 0, Insights.Count: 0 },
                 "extras: closed panels are not stored either");
 
             // the setting keeps new extras off the history entirely while still showing them
@@ -936,7 +930,7 @@ public static partial class SelfTest
             var entry2 = vm2.History.Current;
             await vm2.AlternativesAsync();
             await vm2.InsightsAsync();
-            Check(entry2 is { Alternatives.Count: 0, Insights.Count: 0 } && vm2.AlternativesVisible && vm2.InsightsVisible,
+            Assert.True(entry2 is { Alternatives.Count: 0, Insights.Count: 0 } && vm2.AlternativesVisible && vm2.InsightsVisible,
                 "extras: with keeping off, extras show on screen but stay off the entry");
         }
         finally
@@ -948,15 +942,15 @@ public static partial class SelfTest
 
     /// <summary>An extras request started for one entry bills that entry even when another entry is
     /// restored while the request is in flight; the restored entry keeps its own bill and its panes.</summary>
-    static async Task ExtrasBillTheCapturedEntry()
+    [Fact]
+    public async Task ExtrasBillTheCapturedEntry()
     {
         var port = 19880 + Random.Shared.Next(0, 200);
         var prefix = $"http://127.0.0.1:{port}/";
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "extras entry: mock server start: " + e.Message); return; }
+        listener.Start();
 
         _ = Task.Run(async () =>
         {
@@ -995,7 +989,7 @@ public static partial class SelfTest
                 await ctx.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes(json));
                 ctx.Response.Close();
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings
         {
@@ -1005,7 +999,7 @@ public static partial class SelfTest
             SourceLang = "en",
             TargetLang = "de",
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var provider = new OpenAiCompatibleProvider(http, settings);
@@ -1017,7 +1011,7 @@ public static partial class SelfTest
             await vm.TranslateAsync();
             await vm.WhenIdleAsync(); // the fire-and-forget transliteration is tracked too
             var entry = vm.History.Current;
-            Check(entry is not null && entry.Cost > 0.0105 - 0.000001,
+            Assert.True(entry is not null && entry.Cost > 0.0105 - 0.000001,
                 $"extras entry: the run's own bill ({entry?.Cost})");
             var other = coordinator.Commit("bye", "tschuess", "en", "de");
             vm.History.Refresh();
@@ -1025,20 +1019,20 @@ public static partial class SelfTest
             var otherCost = other.Cost;
 
             var request = vm.AlternativesAsync(); // 200/100 = 0.0021 at the run's frozen prices
-            await Task.Delay(150); // the request is in flight, blocked on the mock's gate
+            await Task.Delay(150, TestContext.Current.CancellationToken); // the request is in flight, blocked on the mock's gate
             vm.History.SelectedEntry = other; // restore another entry mid-flight
             gate.SetResult();
             await request;
 
-            Check(Math.Abs(entry.Cost - (runCost + 0.0021)) < 0.000001,
+            Assert.True(Math.Abs(entry.Cost - (runCost + 0.0021)) < 0.000001,
                 $"extras entry: a mid-flight restore still bills the captured entry ({entry.Cost} vs {runCost}+0.0021)");
-            Check(Math.Abs(other.Cost - otherCost) < 0.000001,
+            Assert.True(Math.Abs(other.Cost - otherCost) < 0.000001,
                 $"extras entry: the restored entry keeps its own bill ({other.Cost})");
-            Check(entry.Alternatives is [{ Text: "Hi", Explanation: "shorter" }],
+            Assert.True(entry.Alternatives is [{ Text: "Hi", Explanation: "shorter" }],
                 "extras entry: the alternatives are stored on the captured entry");
-            Check(vm.Alternatives.Count == 0 && !vm.AlternativesVisible,
+            Assert.True(vm.Alternatives.Count == 0 && !vm.AlternativesVisible,
                 "extras entry: the restored entry's panes are not overwritten");
-            Check(vm.Usage.UsageLabel == other.UsageLabel,
+            Assert.True(vm.Usage.UsageLabel == other.UsageLabel,
                 $"extras entry: the footer still mirrors the restored entry ('{vm.Usage.UsageLabel}')");
         }
         finally
@@ -1048,15 +1042,15 @@ public static partial class SelfTest
         }
     }
 
-    static async Task StreamingRoundTrip()
+    [Fact]
+    public async Task StreamingRoundTrip()
     {
         var port = 18380 + Random.Shared.Next(0, 400);
         var prefix = $"http://127.0.0.1:{port}/";
         string? seenBody = null;
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "mock server start: " + e.Message); return; }
+        listener.Start();
 
         _ = Task.Run(async () =>
         {
@@ -1075,7 +1069,7 @@ public static partial class SelfTest
             await w.WriteAsync("data: [DONE]\n\n");
             await w.FlushAsync();
             w.Close();
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", ApiKey = "test-key", Model = "mock-model" }] };
         using var http = new HttpClient();
@@ -1085,32 +1079,32 @@ public static partial class SelfTest
         TokenUsage? reported = null;
         var sw = Stopwatch.StartNew();
         await foreach (var chunk in provider.TranslateAsync("Hello world.", "en", "de", new TranslationOptions(),
-                           QualityTier.Standard, default, u => reported = u))
+                           QualityTier.Standard, TestContext.Current.CancellationToken, u => reported = u))
         {
             sb.Append(chunk);
             if (sw.Elapsed > TimeSpan.FromSeconds(20)) throw new TimeoutException("streaming stalled");
         }
         listener.Stop();
 
-        Check(sb.ToString() == "Hallo Welt!", $"stream: assembled '{sb}'");
-        Check(seenBody?.Contains("\"model\":\"mock-model\"") == true, "stream: model sent");
-        Check(seenBody?.Contains("German") == true, "stream: prompt sent");
-        Check(seenBody?.Contains("Hello world.") == true, "stream: text sent");
-        Check(seenBody?.Contains("include_usage") == true, "stream: usage requested");
-        Check(reported is { PromptTokens: 12, CompletionTokens: 7 }, "stream: usage reported to the caller");
+        Assert.True(sb.ToString() == "Hallo Welt!", $"stream: assembled '{sb}'");
+        Assert.True(seenBody?.Contains("\"model\":\"mock-model\"") == true, "stream: model sent");
+        Assert.True(seenBody?.Contains("German") == true, "stream: prompt sent");
+        Assert.True(seenBody?.Contains("Hello world.") == true, "stream: text sent");
+        Assert.True(seenBody?.Contains("include_usage") == true, "stream: usage requested");
+        Assert.True(reported is { PromptTokens: 12, CompletionTokens: 7 }, "stream: usage reported to the caller");
     }
 
     /// <summary>A stream that stops mid-sentence has to be asked for the rest, and the second request
     /// has to carry what is already translated, otherwise the model starts over.</summary>
-    static async Task ContinuationRoundTrip()
+    [Fact]
+    public async Task ContinuationRoundTrip()
     {
         var port = 18780 + Random.Shared.Next(0, 200);
         var prefix = $"http://127.0.0.1:{port}/";
         var bodies = new List<string>();
         using var listener = new HttpListener();
         listener.Prefixes.Add(prefix);
-        try { listener.Start(); }
-        catch (Exception e) { Check(false, "continuation: mock server start: " + e.Message); return; }
+        listener.Start();
 
         // first answer is cut by the output budget, second one finishes
         var chunks = new[]
@@ -1135,7 +1129,7 @@ public static partial class SelfTest
                 await w.FlushAsync();
                 w.Close();
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         var settings = new AppSettings { Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", Model = "mock-model" }] };
         using var http = new HttpClient();
@@ -1143,20 +1137,21 @@ public static partial class SelfTest
         var sb = new StringBuilder();
         var sw = Stopwatch.StartNew();
         await foreach (var chunk in provider.TranslateAsync("Hello world.", "en", "de", new TranslationOptions(),
-                           QualityTier.Standard, default))
+                           QualityTier.Standard, TestContext.Current.CancellationToken))
         {
             sb.Append(chunk);
             if (sw.Elapsed > TimeSpan.FromSeconds(20)) throw new TimeoutException("continuation stalled");
         }
         listener.Stop();
 
-        Check(sb.ToString() == "Hallo Welt!", $"continuation: assembled '{sb}'");
-        Check(bodies.Count == 2, $"continuation: one extra request, sent {bodies.Count}");
-        Check(bodies.Count > 1 && bodies[1].Contains("TRANSLATION SO FAR") && bodies[1].Contains("Hallo"),
+        Assert.True(sb.ToString() == "Hallo Welt!", $"continuation: assembled '{sb}'");
+        Assert.True(bodies.Count == 2, $"continuation: one extra request, sent {bodies.Count}");
+        Assert.True(bodies.Count > 1 && bodies[1].Contains("TRANSLATION SO FAR") && bodies[1].Contains("Hallo"),
             "continuation: the second request carries the text so far");
     }
 
-    static async Task StructuredRoundTrip()
+    [Fact]
+    public async Task StructuredRoundTrip()
     {
         var detectAnswer = "{\"iso\":\"fr\",\"label\":\"French\"}";
         var altAnswer = "{\"original_description\":\"Casual tone.\",\"alternatives\":[{\"text\":\"Salut le monde\",\"explanation\":\"Casual\"},{\"text\":\"Bonjour à tous\",\"explanation\":\"Neutral\"}]}";
@@ -1173,30 +1168,30 @@ public static partial class SelfTest
         var provider = new OpenAiCompatibleProvider(http, settings);
         try
         {
-            Check(await provider.DetectAsync("bonjour", default) == "fr", "detect: iso parsed");
+            Assert.True(await provider.DetectAsync("bonjour", TestContext.Current.CancellationToken) == "fr", "detect: iso parsed");
 
-            var (description, alternatives) = await provider.AlternativesAsync("hello world", "hello world", "en", "fr", default);
-            Check(description == "Casual tone." && alternatives.Count == 2, "alternatives: parsed");
-            Check(alternatives[1].Text == "Bonjour à tous" && alternatives[1].HasExplanation, "alternatives: fields");
+            var (description, alternatives) = await provider.AlternativesAsync("hello world", "hello world", "en", "fr", TestContext.Current.CancellationToken);
+            Assert.True(description == "Casual tone." && alternatives.Count == 2, "alternatives: parsed");
+            Assert.True(alternatives[1].Text == "Bonjour à tous" && alternatives[1].HasExplanation, "alternatives: fields");
 
-            var insights = await provider.InsightsAsync("hello world", "hello world", "en", "fr", default);
-            Check(insights.Count == 1 && insights[0].Word == "quick", "insights: parsed");
-            Check(insights[0].Alternatives.Count == 2 && insights[0].Alternatives[1].Text == "vif", "insights: variants");
+            var insights = await provider.InsightsAsync("hello world", "hello world", "en", "fr", TestContext.Current.CancellationToken);
+            Assert.True(insights.Count == 1 && insights[0].Word == "quick", "insights: parsed");
+            Assert.True(insights[0].Alternatives.Count == 2 && insights[0].Alternatives[1].Text == "vif", "insights: variants");
 
-            var (translitSource, translitTarget) = await provider.TransliterationAsync("こんにちは世界", "Hello world", "ja", "en", default);
-            Check(translitSource == "konnichiwa sekai" && translitTarget.Length == 0,
+            var (translitSource, translitTarget) = await provider.TransliterationAsync("こんにちは世界", "Hello world", "ja", "en", TestContext.Current.CancellationToken);
+            Assert.True(translitSource == "konnichiwa sekai" && translitTarget.Length == 0,
                 "transliteration: fields parsed, empty side stays hidden");
-            Check((await provider.TransliterationAsync("hello", "hallo", "en", "de", default)) == ("", ""),
+            Assert.True((await provider.TransliterationAsync("hello", "hallo", "en", "de", TestContext.Current.CancellationToken)) == ("", ""),
                 "transliteration: latin to latin costs no request");
 
-            var (lostDescription, lostItems) = await provider.AlternativesAsync("hello world", "hello world", "en", "fr", default);
-            Check(lostDescription == "" && lostItems.Count == 0, "alternatives: an unparseable answer yields nothing");
-            Check((await provider.InsightsAsync("hello world", "hello world", "en", "fr", default)).Count == 0,
+            var (lostDescription, lostItems) = await provider.AlternativesAsync("hello world", "hello world", "en", "fr", TestContext.Current.CancellationToken);
+            Assert.True(lostDescription == "" && lostItems.Count == 0, "alternatives: an unparseable answer yields nothing");
+            Assert.True((await provider.InsightsAsync("hello world", "hello world", "en", "fr", TestContext.Current.CancellationToken)).Count == 0,
                 "insights: an unparseable answer yields nothing");
-            var bareInsights = await provider.InsightsAsync("hello world", "hello world", "en", "fr", default);
-            Check(bareInsights.Count == 1 && bareInsights[0].Word == "quick" && bareInsights[0].Alternatives.Count == 1,
+            var bareInsights = await provider.InsightsAsync("hello world", "hello world", "en", "fr", TestContext.Current.CancellationToken);
+            Assert.True(bareInsights.Count == 1 && bareInsights[0].Word == "quick" && bareInsights[0].Alternatives.Count == 1,
                 "insights: a bare array answer is read without an envelope");
-            Check((await provider.TransliterationAsync("こんにちは世界", "Hello world", "ja", "en", default)) == ("", ""),
+            Assert.True((await provider.TransliterationAsync("こんにちは世界", "Hello world", "ja", "en", TestContext.Current.CancellationToken)) == ("", ""),
                 "transliteration: an unparseable answer yields nothing");
         }
         finally
@@ -1231,7 +1226,7 @@ public static partial class SelfTest
             TokenUsage? billed = null;
             try { await provider.DetectAsync("hello", default, u => billed = u); }
             catch (HttpRequestException e) { threw = true; message = e.Message; }
-            Check(threw && message.Contains("quota") && billed is null,
+            Assert.True(threw && message.Contains("quota") && billed is null,
                 $"error body: a 200 JSON body without choices fails as an error, never as text ('{message}')");
         }
         finally { listener.Stop(); }
@@ -1255,7 +1250,7 @@ public static partial class SelfTest
             await provider.AlternativesAsync("hello", "hallo", "en", "fr", default);
             await provider.InsightsAsync("hello", "hallo", "en", "fr", default);
             await provider.TransliterationAsync("こんにちは", "hello", "ja", "en", default);
-            Check(bodies.Count == 4, $"fence: all four aux calls went out ({bodies.Count})");
+            Assert.True(bodies.Count == 4, $"fence: all four aux calls went out ({bodies.Count})");
 
             var payloads = new[]
             {
@@ -1270,7 +1265,7 @@ public static partial class SelfTest
                 var turn = doc.RootElement.GetProperty("messages")[1].GetProperty("content").GetString() ?? "";
                 var end = turn.IndexOf('>');
                 var tag = turn.StartsWith('<') && end > 1 ? turn[1..end] : "";
-                Check(tag.Length > 0 && turn.EndsWith($"\n</{tag}>") && turn.Contains($"\n{payloads[i]}\n"),
+                Assert.True(tag.Length > 0 && turn.EndsWith($"\n</{tag}>") && turn.Contains($"\n{payloads[i]}\n"),
                     $"fence: aux call {i + 1} wraps its payload in open/close tags ('{turn.Replace("\n", "\\n")}')");
             }
         }
@@ -1281,7 +1276,8 @@ public static partial class SelfTest
     /// The eraser empties the source and the translation it produced. A chunk or a romanisation that was
     /// still in flight must not repaint the cleared panes afterwards.
     /// </summary>
-    static async Task ClearDropsResults()
+    [Fact]
+    public async Task ClearDropsResults()
     {
         var port = 19100 + Random.Shared.Next(0, 90);
         var prefix = $"http://127.0.0.1:{port}/";
@@ -1340,7 +1336,7 @@ public static partial class SelfTest
             Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", ApiKey = "test-key", Model = "mock" }],
             SourceLang = "ja", TargetLang = "en",
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var vm = NewTranslateVm(settings, dir, http);
@@ -1349,39 +1345,40 @@ public static partial class SelfTest
             // the baseline: a finished run carries its romanisation on both panes
             vm.InputText = "こんにちは世界";
             await vm.TranslateAsync();
-            for (var i = 0; i < 60 && !vm.HasTranslitTarget; i++) await Task.Delay(50);
-            Check(vm.OutputText == "Hallo Welt" && vm.HasTranslitSource && vm.HasTranslitTarget,
+            for (var i = 0; i < 60 && !vm.HasTranslitTarget; i++) await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.True(vm.OutputText == "Hallo Welt" && vm.HasTranslitSource && vm.HasTranslitTarget,
                 $"clear: a finished run shows its transliteration ('{vm.TranslitSource}' / '{vm.TranslitTarget}')");
 
             // the entry keeps it: restoring from history brings the line back instead of paying again
             vm.History.SelectedEntry = vm.History.Current;
-            Check(vm.HasTranslitSource && vm.TranslitTarget == "hello world",
+            Assert.True(vm.HasTranslitSource && vm.TranslitTarget == "hello world",
                 $"translit: a restored entry shows its saved romanisation ('{vm.TranslitTarget}')");
-            Check(vm.History.Current?.TranslitTarget == "hello world",
+            Assert.True(vm.History.Current?.TranslitTarget == "hello world",
                 "translit: the finished entry stores its romanisation");
 
             vm.ClearInputCommand.Execute(null);
-            Check(vm.InputText == "" && vm.OutputText == "" && !vm.HasTranslitSource && !vm.HasTranslitTarget,
+            Assert.True(vm.InputText == "" && vm.OutputText == "" && !vm.HasTranslitSource && !vm.HasTranslitTarget,
                 $"clear: the eraser empties the source, the translation and both transliterations ('{vm.OutputText}')");
 
             // the romanisation of the next run is still in flight when the clear lands
             vm.InputText = "こんにちは世界";
             await vm.TranslateAsync();
             vm.ClearInputCommand.Execute(null);
-            await Task.Delay(1000);
-            Check(vm.OutputText == "" && !vm.HasTranslitSource && !vm.HasTranslitTarget,
+            await Task.Delay(1000, TestContext.Current.CancellationToken);
+            Assert.True(vm.OutputText == "" && !vm.HasTranslitSource && !vm.HasTranslitTarget,
                 $"clear: a romanisation in flight does not repaint the cleared panes ('{vm.TranslitTarget}')");
 
             // the same for a run that is still streaming: its remaining chunks belong to the erased text
             settings.Providers[0].BaseUrl = prefix + "slow";
             vm.InputText = "こんにちは世界";
             var running = vm.TranslateAsync();
-            for (var i = 0; i < 100 && vm.OutputText.Length == 0; i++) await Task.Delay(20);
-            Check(vm.OutputText == "Hallo Welt", $"clear: the run streams into the pane first ('{vm.OutputText}')");
+            // generous budget: the first chunk must survive server delay + coalescer flush on a loaded machine
+            for (var i = 0; i < 300 && vm.OutputText.Length == 0; i++) await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.True(vm.OutputText == "Hallo Welt", $"clear: the run streams into the pane first ('{vm.OutputText}')");
             vm.ClearInputCommand.Execute(null);
             await running;
-            await Task.Delay(1200);
-            Check(vm.InputText == "" && vm.OutputText == "" && !vm.IsBusy,
+            await Task.Delay(1200, TestContext.Current.CancellationToken);
+            Assert.True(vm.InputText == "" && vm.OutputText == "" && !vm.IsBusy,
                 $"clear: a chunk still in flight stays out of the cleared panes ('{vm.OutputText}')");
         }
         finally
@@ -1395,7 +1392,8 @@ public static partial class SelfTest
     /// Restoring a history entry while a run is still streaming takes the panes away from it: its
     /// remaining chunks, status and romanisation belong to the replaced text, not the restored one.
     /// </summary>
-    static async Task RestoreKeepsInFlightRun()
+    [Fact]
+    public async Task RestoreKeepsInFlightRun()
     {
         var port = 19400 + Random.Shared.Next(0, 90);
         var prefix = $"http://127.0.0.1:{port}/";
@@ -1434,7 +1432,7 @@ public static partial class SelfTest
             Providers = [new ProviderConfig { Name = "p", BaseUrl = prefix + "v1", ApiKey = "test-key", Model = "mock" }],
             SourceLang = "ja", TargetLang = "en",
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         var pre = new HistoryEntry { Source = "Guten Tag", Output = "Good day", From = "ja", To = "en" };
         history.Add(pre);
@@ -1444,21 +1442,21 @@ public static partial class SelfTest
         {
             vm.InputText = "こんにちは世界";
             var task = vm.TranslateAsync();
-            for (var i = 0; i < 100 && vm.OutputText.Length == 0; i++) await Task.Delay(20);
-            Check(vm.OutputText == "Hallo Welt", $"restore: the run streams its first chunks in ('{vm.OutputText}')");
+            // generous budget: the first chunk must survive server delay + coalescer flush on a loaded machine
+            for (var i = 0; i < 300 && vm.OutputText.Length == 0; i++) await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.True(vm.OutputText == "Hallo Welt", $"restore: the run streams its first chunks in ('{vm.OutputText}')");
 
             vm.History.SelectedEntry = pre; // the restore takes the panes, but must not cancel the run
-            Check(vm.OutputText == "Good day", "restore: the panes switch to the restored entry");
-            Check(vm.IsBusy, "restore: the in-flight run keeps the busy flag set");
+            Assert.True(vm.OutputText == "Good day", "restore: the panes switch to the restored entry");
+            Assert.True(vm.IsBusy, "restore: the in-flight run keeps the busy flag set");
             gate.TrySetResult(); // the late chunks and DONE arrive now, after the panes changed hands
-            try { await task; Check(true, "restore: the in-flight run ends without throwing"); }
-            catch (Exception e) { Check(false, $"restore: the in-flight run threw ({e.Message})"); }
-            Check(!vm.IsBusy, "restore: the finished run leaves the busy flag clear");
-            Check(history.Entries.Any(e => e.Source == "こんにちは世界" && e.Output == "Hallo Welt!"),
+            await task;
+            Assert.True(!vm.IsBusy, "restore: the finished run leaves the busy flag clear");
+            Assert.True(history.Entries.Any(e => e.Source == "こんにちは世界" && e.Output == "Hallo Welt!"),
                 "restore: the finished run lands in the history list");
-            await Task.Delay(1200); // give any late chunk or romanisation the chance to misfire
-            Check(vm.OutputText == "Good day", $"restore: a late chunk does not repaint the restored panes ('{vm.OutputText}')");
-            Check(vm.History.Current == pre, "restore: the panel stays on the restored entry");
+            await Task.Delay(1200, TestContext.Current.CancellationToken); // give any late chunk or romanisation the chance to misfire
+            Assert.True(vm.OutputText == "Good day", $"restore: a late chunk does not repaint the restored panes ('{vm.OutputText}')");
+            Assert.True(vm.History.Current == pre, "restore: the panel stays on the restored entry");
         }
         finally
         {
@@ -1471,7 +1469,8 @@ public static partial class SelfTest
     /// Restoring an entry loads its frozen usage (tokens plus the prices of that run) into the footer,
     /// not the prices that are live by now.
     /// </summary>
-    static async Task RestoreLoadsUsageIntoFooter()
+    [Fact]
+    public async Task RestoreLoadsUsageIntoFooter()
     {
         var port = 19920 + Random.Shared.Next(0, 40);
         var prefix = $"http://127.0.0.1:{port}/";
@@ -1492,7 +1491,7 @@ public static partial class SelfTest
             InputPricePerMTok = 3, OutputPricePerMTok = 15,
             SourceLang = "ja", TargetLang = "en",
         };
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var history = new History(dir);
         using var http = new HttpClient();
         var vm = NewTranslateVm(settings, dir, http);
@@ -1501,15 +1500,15 @@ public static partial class SelfTest
             vm.InputText = "こんにちは";
             await vm.TranslateAsync();
             var entry = vm.History.Current;
-            Check(entry is { PromptTokens: 1000, CompletionTokens: 500, Cost: > 0 },
+            Assert.True(entry is { PromptTokens: 1000, CompletionTokens: 500, Cost: > 0 },
                 $"restore usage: the entry carries the run's usage and cost ({entry?.PromptTokens}/{entry?.CompletionTokens}, {entry?.Cost})");
 
             settings.InputPricePerMTok = 30; // the live price moves after the run: the restore must not follow it
             vm.History.SelectedEntry = entry;
-            Check(vm.History.Current == entry, "restore usage: the restored entry is current");
-            Check(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel,
+            Assert.True(vm.History.Current == entry, "restore usage: the restored entry is current");
+            Assert.True(entry is not null && vm.Usage.UsageLabel == entry.UsageLabel,
                 $"restore usage: the footer shows the entry's frozen usage ('{vm.Usage.UsageLabel}')");
-            Check(vm.Usage.UsageLabel.Contains("0.0105"),
+            Assert.True(vm.Usage.UsageLabel.Contains("0.0105"),
                 $"restore usage: the footer label carries the frozen cost ('{vm.Usage.UsageLabel}')");
         }
         finally
@@ -1563,9 +1562,10 @@ public static partial class SelfTest
     /// UntilIdleAsync pending for its whole flight — the counter must cover the request's start, and a stale
     /// completed idle from a previous cycle must not be served while a run is in flight — and releasing the
     /// provider must complete them.</summary>
-    static async Task IdleCounterRace()
+    [Fact]
+    public async Task IdleCounterRace()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var stub = new GatedStub();
         var coordinator = new TranslationCoordinator(stub, new AppSettings(), new History(dir));
         try
@@ -1578,15 +1578,15 @@ public static partial class SelfTest
             for (var i = 0; i < 20 && pending; i++)
             {
                 if (coordinator.WhenIdleAsync().IsCompleted) pending = false;
-                else await Task.Delay(5);
+                else await Task.Delay(5, TestContext.Current.CancellationToken);
             }
-            Check(pending, "idle race: WhenIdleAsync is NOT completed while a request is in flight");
+            Assert.True(pending, "idle race: WhenIdleAsync is NOT completed while a request is in flight");
             var until = coordinator.UntilIdleAsync();
-            Check(!until.IsCompleted, "idle race: UntilIdleAsync is NOT completed while a request is in flight");
+            Assert.True(!until.IsCompleted, "idle race: UntilIdleAsync is NOT completed while a request is in flight");
             stub.gate.Set(); // let the fake provider answer
             await WithTimeout(run, "idle race: the released run finishes");
             await WithTimeout(until, "idle race: UntilIdleAsync completes once the run is done");
-            Check(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the run");
+            Assert.True(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the run");
 
             // the aux calls must be counted from their very start too: they used to start the provider
             // task before Enter, so idle could read as completed while the request was already in flight
@@ -1594,20 +1594,21 @@ public static partial class SelfTest
             stub.gate = new ManualResetEventSlim(false);
             var aux = Task.Run(() => coordinator.TransliterationAsync("hello", "Hallo", "en", "de"));
             await stub.started.Task; // the aux request is in flight inside the provider now
-            Check(!coordinator.WhenIdleAsync().IsCompleted,
+            Assert.True(!coordinator.WhenIdleAsync().IsCompleted,
                 "idle race: WhenIdleAsync is NOT completed while an aux request is in flight");
             stub.gate.Set(); // let the fake provider answer
             await WithTimeout(aux, "idle race: the released aux request finishes");
-            Check(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the aux request");
+            Assert.True(coordinator.WhenIdleAsync().IsCompleted, "idle race: WhenIdleAsync completed after the aux request");
         }
         finally { try { Directory.Delete(dir, true); } catch (Exception) { } }
     }
 
     /// <summary>Idle-counter hammer: 50 sequential gated runs — while each run is in flight the idle task must
     /// never read as completed (no stale completed TCS across cycles while active&gt;0), and after each run it must be.</summary>
-    static async Task IdleHammerAcrossCycles()
+    [Fact]
+    public async Task IdleHammerAcrossCycles()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "hakata-selftest-" + Guid.NewGuid().ToString("n"));
+        var dir = Path.Combine(Path.GetTempPath(), "hakata-test-" + Guid.NewGuid().ToString("n"));
         var stub = new GatedStub();
         var coordinator = new TranslationCoordinator(stub, new AppSettings(), new History(dir));
         try
@@ -1624,15 +1625,15 @@ public static partial class SelfTest
                 for (var i = 0; i < 5; i++)
                 {
                     if (coordinator.WhenIdleAsync().IsCompleted) inFlightCompleted++;
-                    await Task.Delay(2);
+                    await Task.Delay(2, TestContext.Current.CancellationToken);
                 }
                 stub.gate.Set();
                 await WithTimeout(run, $"idle hammer: cycle {c} run finishes");
                 if (coordinator.WhenIdleAsync().IsCompleted) doneCompleted++;
             }
-            Check(inFlightCompleted == 0,
+            Assert.True(inFlightCompleted == 0,
                 $"idle hammer: {cycles} in-flight runs never saw a completed idle ({inFlightCompleted} hits)");
-            Check(doneCompleted == cycles,
+            Assert.True(doneCompleted == cycles,
                 $"idle hammer: idle completed after each of the {cycles} runs ({doneCompleted}/{cycles})");
         }
         finally { try { Directory.Delete(dir, true); } catch (Exception) { } }
