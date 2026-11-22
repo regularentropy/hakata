@@ -66,18 +66,32 @@ internal static class ProviderHttp
         var buffer = new byte[16 * 1024];
         int read;
         var capped = false; // the loop ended on the cap, not on the end of the body
-        while ((read = await stream.ReadAsync(buffer.AsMemory(), deadline.Token)) > 0)
+        try
         {
-            var room = cap - (int)collected.Length;
-            if (read <= room)
+            while ((read = await stream.ReadAsync(buffer.AsMemory(), deadline.Token)) > 0)
             {
-                collected.Write(buffer, 0, read);
-                continue;
+                var room = cap - (int)collected.Length;
+                if (read <= room)
+                {
+                    collected.Write(buffer, 0, read);
+                    continue;
+                }
+                if (room > 0) collected.Write(buffer, 0, room);
+                if (strict) throw TooBig(cap);
+                capped = true;
+                break;
             }
-            if (room > 0) collected.Write(buffer, 0, room);
-            if (strict) throw TooBig(cap);
-            capped = true;
-            break;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // not a stop the user asked for: a connection reset mid-read surfaces as a
+            // cancellation of the in-flight read (immediately, or only when the deadline fires,
+            // depending on the OS); against a declared length that promised more than arrived,
+            // either way it is a body cut mid-transfer, never playback
+            var declared = content.Headers.ContentLength;
+            if (declared is > 0 && collected.Length < declared.Value)
+                throw CutShort(collected.Length, declared.Value);
+            throw;
         }
         // a body shorter than the length the response headers promised was cut mid-transfer
         if (!capped && content.Headers.ContentLength is > 0 && collected.Length < content.Headers.ContentLength)
