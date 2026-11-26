@@ -1,0 +1,9 @@
+<Project>
+
+  <PropertyGroup>
+    <OsSuffix Condition="$([MSBuild]::IsOSPlatform('Windows'))">win</OsSuffix>
+    <OsSuffix Condition="!$([MSBuild]::IsOSPlatform('Windows'))">unix</OsSuffix>
+    <MSBuildProjectExtensionsPath>$(MSBuildProjectDirectory)/obj/$(OsSuffix)/</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+
+</Project>
